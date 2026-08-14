@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A Walk With Your Dog</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream: #fbf1de;
+    --cream-dark: #f2e2c4;
+    --path: #e8c99a;
+    --grass: #9cba6f;
+    --grass-dark: #7fa356;
+    --fog: #d9c9ad;
+    --fog-dark: #c7b494;
+    --brown: #6b4a30;
+    --brown-dark: #4a3220;
+    --amber: #d98e3f;
+    --amber-dark: #b96f2a;
+    --panel: #fffaf0;
+    --ink: #4a3220;
+    --shadow: rgba(74, 50, 32, 0.25);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 20% 10%, #fff6e4 0%, transparent 45%),
+      linear-gradient(160deg, var(--cream) 0%, var(--cream-dark) 100%);
+    font-family: 'Quicksand', sans-serif;
+    color: var(--ink);
+    padding: 24px 16px 60px;
+  }
+
+  .wrap {
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+
+  header h1 {
+    font-family: 'Baloo 2', cursive;
+    font-size: clamp(28px, 5vw, 44px);
+    color: var(--brown-dark);
+    margin: 0 0 6px;
+    text-shadow: 2px 2px 0 rgba(255,255,255,0.5);
+  }
+
+  header p {
+    margin: 0;
+    color: var(--brown);
+    font-weight: 600;
+    opacity: 0.85;
+  }
+
+  header p.name-editor {
+    margin-top: 8px;
+    font-size: 13px;
+  }
+
+  header p.name-editor input {
+    font-family: 'Quicksand', sans-serif;
+    font-weight: 700;
+    border: 2px solid var(--amber);
+    border-radius: 999px;
+    padding: 3px 12px;
+    font-size: 13px;
+    color: var(--brown-dark);
+    background: var(--panel);
+    margin-left: 4px;
+  }
+
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+  }
+
+  .stat-card {
+    background: var(--panel);
+    border: 3px solid var(--amber);
+    border-radius: 16px;
+    padding: 12px 10px;
+    text-align: center;
+    box-shadow: 0 4px 0 var(--shadow);
+  }
+
+  .stat-card .value {
+    font-family: 'Baloo 2', cursive;
+    font-size: 24px;
+    color: var(--amber-dark);
+    display: block;
+  }
+
+  .stat-card .label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--brown);
+    opacity: 0.75;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 3fr) minmax(220px, 1fr);
+    gap: 20px;
+  }
+
+  @media (max-width: 800px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  .board-frame {
+    background: var(--panel);
+    border: 4px solid var(--brown);
+    border-radius: 20px;
+    padding: 14px;
+    box-shadow: 0 6px 0 var(--shadow);
+  }
+
+  .grid-wrap {
+    position: relative;
+    aspect-ratio: 14 / 8;
+    background: var(--brown);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .grid {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: repeat(14, 1fr);
+    gap: 2px;
+  }
+
+  .cell {
+    position: relative;
+    background: var(--fog);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: clamp(10px, 1.6vw, 20px);
+    transition: background 0.4s ease, transform 0.2s ease;
+  }
+
+  .cell.unexplored {
+    background: repeating-linear-gradient(45deg, var(--fog), var(--fog) 6px, var(--fog-dark) 6px, var(--fog-dark) 12px);
+  }
+
+  .cell.explored {
+    background: var(--grass);
+    animation: reveal 0.5s ease;
+  }
+
+  .cell.explored::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(90deg, transparent, transparent 8px, rgba(0,0,0,0.03) 8px, rgba(0,0,0,0.03) 16px);
+  }
+
+  @keyframes reveal {
+    from { background: var(--fog); transform: scale(0.85); }
+    to { background: var(--grass); transform: scale(1); }
+  }
+
+  .cell .marker {
+    position: relative;
+    z-index: 2;
+    filter: drop-shadow(1px 1px 0 rgba(0,0,0,0.25));
+  }
+
+  .cell.home .marker { font-size: 1.4em; }
+  .cell.last .marker { animation: bob 1.6s ease-in-out infinite; }
+
+  @keyframes bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+  }
+
+  .cell .treasure {
+    position: absolute;
+    bottom: 1px;
+    right: 1px;
+    font-size: 0.6em;
+    z-index: 1;
+  }
+
+  .playback-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+  }
+
+  .playback-overlay[hidden] {
+    display: none;
+  }
+
+  #playback-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .dog-marker {
+    position: absolute;
+    font-size: 22px;
+    transform: translate(-50%, -55%);
+    filter: drop-shadow(1px 2px 1px rgba(0,0,0,0.4));
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .playback-controls {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(74, 50, 32, 0.85);
+    padding: 6px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .pb-btn {
+    background: var(--amber);
+    border: none;
+    color: #fff;
+    border-radius: 6px;
+    padding: 4px 9px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  #playback-scrub {
+    flex: 1;
+    min-width: 70px;
+  }
+
+  .pb-speed {
+    display: flex;
+    gap: 2px;
+  }
+
+  .pb-speed-btn {
+    background: rgba(255,255,255,0.18);
+    border: none;
+    color: #fff;
+    padding: 4px 7px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .pb-speed-btn.active {
+    background: var(--amber);
+  }
+
+  .pb-info {
+    width: 100%;
+    text-align: center;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    order: 5;
+  }
+
+  .walk-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 230px;
+    overflow-y: auto;
+  }
+
+  .walk-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--cream-dark);
+    border-radius: 10px;
+    padding: 6px 10px;
+    gap: 8px;
+  }
+
+  .walk-item .meta {
+    display: flex;
+    flex-direction: column;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .walk-item .meta .date {
+    font-weight: 700;
+    color: var(--brown-dark);
+  }
+
+  .walk-item .meta .sub {
+    color: var(--brown);
+    opacity: 0.8;
+  }
+
+  .watch-btn {
+    background: var(--grass-dark);
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    margin-top: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--brown);
+    justify-content: center;
+  }
+
+  .side {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 3px solid var(--amber);
+    border-radius: 16px;
+    padding: 14px;
+    box-shadow: 0 4px 0 var(--shadow);
+  }
+
+  .panel h2 {
+    font-family: 'Baloo 2', cursive;
+    font-size: 18px;
+    margin: 0 0 10px;
+    color: var(--brown-dark);
+  }
+
+  .dog-zone {
+    text-align: center;
+  }
+
+  .dog-sprite {
+    font-size: 56px;
+    display: inline-block;
+    transition: transform 0.15s ease;
+  }
+
+  .dog-sprite.wag {
+    animation: wag 0.6s ease;
+  }
+
+  @keyframes wag {
+    0%, 100% { transform: rotate(0deg); }
+    20% { transform: rotate(-14deg) translateX(-2px); }
+    40% { transform: rotate(12deg) translateX(2px); }
+    60% { transform: rotate(-10deg) translateX(-2px); }
+    80% { transform: rotate(8deg) translateX(1px); }
+  }
+
+  .pet-btn {
+    margin-top: 8px;
+    font-family: 'Baloo 2', cursive;
+    font-size: 15px;
+    background: var(--amber);
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    padding: 10px 20px;
+    cursor: pointer;
+    box-shadow: 0 3px 0 var(--amber-dark);
+  }
+
+  .pet-btn:active {
+    transform: translateY(2px);
+    box-shadow: 0 1px 0 var(--amber-dark);
+  }
+
+  .reaction {
+    min-height: 20px;
+    margin-top: 8px;
+    font-weight: 600;
+    color: var(--brown-dark);
+    font-size: 13px;
+  }
+
+  .backpack-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .backpack-item {
+    background: var(--cream-dark);
+    border-radius: 10px;
+    padding: 8px 4px;
+    text-align: center;
+    font-size: 20px;
+  }
+
+  .backpack-item .count {
+    display: block;
+    font-family: 'Baloo 2', cursive;
+    font-size: 13px;
+    color: var(--brown-dark);
+    margin-top: 2px;
+  }
+
+  .data-controls textarea {
+    width: 100%;
+    min-height: 90px;
+    border-radius: 10px;
+    border: 2px solid var(--path);
+    padding: 8px;
+    font-family: monospace;
+    font-size: 11px;
+    resize: vertical;
+  }
+
+  .data-controls .btn-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    font-family: 'Quicksand', sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    background: var(--grass-dark);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+
+  .btn.secondary {
+    background: var(--brown);
+  }
+
+  .btn.file {
+    background: var(--amber-dark);
+  }
+
+  .data-msg {
+    margin-top: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    min-height: 16px;
+  }
+
+  .data-msg.ok { color: #4a7a3a; }
+  .data-msg.err { color: #a53a3a; }
+
+  input[type=file] {
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1 id="page-title">🐾 A Walk With <span id="header-dog-name">Your Dog</span></h1>
+      <p>Every walk fills in a little more of the map</p>
+      <p class="name-editor">
+        Dog's name:
+        <input type="text" id="dog-name-input" value="" placeholder="e.g. Guinness" maxlength="30">
+      </p>
+    </header>
+
+    <div class="stats-bar">
+      <div class="stat-card"><span class="value" id="stat-distance">0</span><span class="label">km walked</span></div>
+      <div class="stat-card"><span class="value" id="stat-walks">0</span><span class="label">walks</span></div>
+      <div class="stat-card"><span class="value" id="stat-explored">0%</span><span class="label">explored</span></div>
+      <div class="stat-card"><span class="value" id="stat-treasures">0</span><span class="label">treasures</span></div>
+    </div>
+
+    <div class="layout">
+      <div class="board-frame">
+        <div class="grid-wrap">
+          <div class="grid" id="grid"></div>
+          <div class="playback-overlay" id="playback-overlay" hidden>
+            <svg id="playback-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+            <div class="dog-marker" id="dog-marker">🐕</div>
+            <div class="playback-controls">
+              <button class="pb-btn" id="playback-close" title="Close">✕</button>
+              <button class="pb-btn" id="playback-playpause">⏸</button>
+              <input type="range" id="playback-scrub" min="0" max="1000" value="0">
+              <div class="pb-speed">
+                <button class="pb-speed-btn" data-speed="1">1x</button>
+                <button class="pb-speed-btn" data-speed="2">2x</button>
+                <button class="pb-speed-btn" data-speed="4">4x</button>
+              </div>
+              <div class="pb-info" id="playback-info"></div>
+            </div>
+          </div>
+        </div>
+        <div class="legend">
+          <span>🏡 home</span>
+          <span>🐾 last spotted</span>
+          <span>🟩 explored</span>
+          <span>▦ unexplored</span>
+        </div>
+      </div>
+
+      <div class="side">
+        <div class="panel dog-zone">
+          <h2 id="dog-zone-name">Your Dog</h2>
+          <div class="dog-sprite" id="dog-sprite">🐕‍🦺</div>
+          <div>
+            <button class="pet-btn" id="pet-btn">Pet the dog</button>
+          </div>
+          <div class="reaction" id="reaction"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Backpack</h2>
+          <div class="backpack-grid" id="backpack"></div>
+        </div>
+
+        <div class="panel">
+          <h2>Walks</h2>
+          <div class="walk-list" id="walk-list"></div>
+        </div>
+
+        <div class="panel data-controls">
+          <h2>Load walk data</h2>
+          <p style="font-size:12px; margin:0 0 8px; color:var(--brown);">
+            Paste JSON like <code>[{"lat":55.79,"lng":-4.29,"t":"2026-08-10T07:12:00Z"}]</code>,
+            or load an exported file.
+          </p>
+          <textarea id="json-input" placeholder="Paste walk JSON here..."></textarea>
+          <div class="btn-row">
+            <button class="btn" id="load-json-btn">Load pasted data</button>
+            <label class="btn file" for="json-file">Load file&hellip;</label>
+            <input type="file" id="json-file" accept="application/json,.json">
+            <button class="btn secondary" id="reset-demo-btn">Reset to demo</button>
+          </div>
+          <div class="data-msg" id="data-msg"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var GRID_COLS = 14;
+  var GRID_ROWS = 8;
+  var GAP_MINUTES = 90;
+  var TREASURE_CHANCE = 0.22;
+  var TREASURES = ["🌰", "🦴", "🍂", "🎾", "🪵", "💭"];
+  var REACTIONS = [
+    "{name}'s tail is a blur!",
+    "Happy borks all around.",
+    "They lean into your hand, content.",
+    "A big goofy grin appears.",
+    "They flop over for belly rubs.",
+    "Ears perk up, tail thumping the floor.",
+    "They nuzzle in for more.",
+    "Pure, uncomplicated joy."
+  ];
+
+  var DEFAULT_DOG_NAME = "Your Dog";
+
+  // Demo/mock walks are centered here when no real data has been loaded yet.
+  var MOCK_CENTER = { lat: 55.7936, lng: -4.2934 };
+
+  var state = {
+    points: [],
+    walks: [],
+    bounds: null,
+    grid: null,
+    dogName: DEFAULT_DOG_NAME
+  };
+
+  var pb = {
+    walkIndex: null,
+    playing: false,
+    speed: 1,
+    duration: 20000,
+    elapsedMs: 0,
+    lastFrameTime: null,
+    rafId: null
+  };
+
+  // ---------- geo helpers ----------
+
+  function haversineKm(a, b) {
+    var R = 6371;
+    var dLat = (b.lat - a.lat) * Math.PI / 180;
+    var dLng = (b.lng - a.lng) * Math.PI / 180;
+    var lat1 = a.lat * Math.PI / 180;
+    var lat2 = b.lat * Math.PI / 180;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+
+  function splitByGap(points, gapMinutes) {
+    var sorted = points.slice().sort(function (a, b) {
+      return new Date(a.t) - new Date(b.t);
+    });
+    var walks = [];
+    var current = [];
+    var gapMs = gapMinutes * 60 * 1000;
+    sorted.forEach(function (p) {
+      if (current.length === 0) {
+        current.push(p);
+        return;
+      }
+      var prev = current[current.length - 1];
+      var diff = new Date(p.t) - new Date(prev.t);
+      if (diff > gapMs) {
+        walks.push(current);
+        current = [p];
+      } else {
+        current.push(p);
+      }
+    });
+    if (current.length) walks.push(current);
+    return walks;
+  }
+
+  function computeBounds(points) {
+    var lats = points.map(function (p) { return p.lat; });
+    var lngs = points.map(function (p) { return p.lng; });
+    var minLat = Math.min.apply(null, lats);
+    var maxLat = Math.max.apply(null, lats);
+    var minLng = Math.min.apply(null, lngs);
+    var maxLng = Math.max.apply(null, lngs);
+
+    // avoid a degenerate (zero-size) box, and add breathing room
+    var latSpan = Math.max(maxLat - minLat, 0.002);
+    var lngSpan = Math.max(maxLng - minLng, 0.002);
+    var padLat = latSpan * 0.12;
+    var padLng = lngSpan * 0.12;
+
+    return {
+      minLat: minLat - padLat,
+      maxLat: maxLat + padLat,
+      minLng: minLng - padLng,
+      maxLng: maxLng + padLng
+    };
+  }
+
+  function pointToCell(p, bounds) {
+    var latRange = bounds.maxLat - bounds.minLat;
+    var lngRange = bounds.maxLng - bounds.minLng;
+    // row 0 at the top = northernmost
+    var row = Math.floor(((bounds.maxLat - p.lat) / latRange) * GRID_ROWS);
+    var col = Math.floor(((p.lng - bounds.minLng) / lngRange) * GRID_COLS);
+    row = Math.min(Math.max(row, 0), GRID_ROWS - 1);
+    col = Math.min(Math.max(col, 0), GRID_COLS - 1);
+    return { row: row, col: col };
+  }
+
+  // deterministic pseudo-random per cell index, so redraws are stable
+  function seededRandom(seed) {
+    var x = Math.sin(seed * 9973 + 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  // ---------- mock data ----------
+
+  function mockWalk(seed, startTime, durationMin) {
+    var points = [];
+    var n = 60 + Math.floor(seededRandom(seed) * 40);
+    var angleOffset = seededRandom(seed * 3.1) * Math.PI * 2;
+    var direction = seededRandom(seed * 5.7) > 0.5 ? 1 : -1;
+    var radiusScale = 0.006 + seededRandom(seed * 2.3) * 0.01;
+    var t0 = startTime.getTime();
+    var stepMs = (durationMin * 60 * 1000) / n;
+
+    for (var i = 0; i < n; i++) {
+      var progress = i / n;
+      var angle = angleOffset + direction * progress * Math.PI * 5;
+      var radius = radiusScale * progress * (0.6 + 0.4 * Math.sin(progress * Math.PI * 3 + seed));
+      var wobble = (seededRandom(seed * 100 + i) - 0.5) * 0.0006;
+      var lat = MOCK_CENTER.lat + Math.sin(angle) * radius * 0.62 + wobble;
+      var lng = MOCK_CENTER.lng + Math.cos(angle) * radius + wobble;
+      points.push({
+        lat: lat,
+        lng: lng,
+        t: new Date(t0 + i * stepMs).toISOString()
+      });
+    }
+    return points;
+  }
+
+  function generateMockData() {
+    var points = [];
+    var now = new Date();
+    for (var w = 0; w < 7; w++) {
+      var daysAgo = w * 2 + Math.floor(seededRandom(w * 7.3) * 1.5);
+      var start = new Date(now.getTime() - daysAgo * 24 * 3600 * 1000);
+      start.setHours(7 + Math.floor(seededRandom(w * 11) * 10), Math.floor(seededRandom(w) * 60), 0, 0);
+      var duration = 18 + Math.floor(seededRandom(w * 4.2) * 25);
+      points = points.concat(mockWalk(w + 1, start, duration));
+    }
+    return points;
+  }
+
+  // ---------- core build ----------
+
+  function buildFromPoints(points) {
+    if (!points.length) return;
+
+    state.points = points.slice().sort(function (a, b) {
+      return new Date(a.t) - new Date(b.t);
+    });
+    state.walks = splitByGap(state.points, GAP_MINUTES);
+    state.bounds = computeBounds(state.points);
+
+    var grid = [];
+    for (var r = 0; r < GRID_ROWS; r++) {
+      var row = [];
+      for (var c = 0; c < GRID_COLS; c++) {
+        row.push({ explored: false, treasure: null });
+      }
+      grid.push(row);
+    }
+
+    state.points.forEach(function (p) {
+      var cell = pointToCell(p, state.bounds);
+      grid[cell.row][cell.col].explored = true;
+    });
+
+    for (var r2 = 0; r2 < GRID_ROWS; r2++) {
+      for (var c2 = 0; c2 < GRID_COLS; c2++) {
+        var g = grid[r2][c2];
+        if (!g.explored) continue;
+        var idx = r2 * GRID_COLS + c2;
+        if (seededRandom(idx * 1.618) < TREASURE_CHANCE) {
+          var tIdx = Math.floor(seededRandom(idx * 2.718 + 1) * TREASURES.length);
+          g.treasure = TREASURES[tIdx];
+        }
+      }
+    }
+
+    state.grid = grid;
+    render();
+  }
+
+  // ---------- rendering ----------
+
+  function render() {
+    renderGrid();
+    renderStats();
+    renderBackpack();
+    renderWalksList();
+    closePlayback();
+  }
+
+  function renderGrid() {
+    var gridEl = document.getElementById("grid");
+    gridEl.innerHTML = "";
+
+    var homePoint = state.points[0];
+    var lastPoint = state.points[state.points.length - 1];
+    var homeCell = pointToCell(homePoint, state.bounds);
+    var lastCell = pointToCell(lastPoint, state.bounds);
+
+    for (var r = 0; r < GRID_ROWS; r++) {
+      for (var c = 0; c < GRID_COLS; c++) {
+        var g = state.grid[r][c];
+        var cellEl = document.createElement("div");
+        cellEl.className = "cell " + (g.explored ? "explored" : "unexplored");
+
+        var isHome = r === homeCell.row && c === homeCell.col;
+        var isLast = r === lastCell.row && c === lastCell.col;
+
+        if (isHome) {
+          cellEl.classList.add("home");
+          cellEl.innerHTML += '<span class="marker">🏡</span>';
+        } else if (isLast) {
+          cellEl.classList.add("last");
+          cellEl.innerHTML += '<span class="marker">🐾</span>';
+        }
+
+        if (g.explored && g.treasure && !isHome && !isLast) {
+          cellEl.innerHTML += '<span class="treasure">' + g.treasure + '</span>';
+        }
+
+        gridEl.appendChild(cellEl);
+      }
+    }
+  }
+
+  function renderStats() {
+    var totalKm = 0;
+    state.walks.forEach(function (walk) {
+      for (var i = 1; i < walk.length; i++) {
+        totalKm += haversineKm(walk[i - 1], walk[i]);
+      }
+    });
+
+    var exploredCount = 0;
+    var totalCells = GRID_ROWS * GRID_COLS;
+    var treasureCount = 0;
+    state.grid.forEach(function (row) {
+      row.forEach(function (cell) {
+        if (cell.explored) exploredCount++;
+        if (cell.explored && cell.treasure) treasureCount++;
+      });
+    });
+
+    document.getElementById("stat-distance").textContent = totalKm.toFixed(1);
+    document.getElementById("stat-walks").textContent = state.walks.length;
+    document.getElementById("stat-explored").textContent = Math.round((exploredCount / totalCells) * 100) + "%";
+    document.getElementById("stat-treasures").textContent = treasureCount;
+  }
+
+  function renderBackpack() {
+    var counts = {};
+    TREASURES.forEach(function (t) { counts[t] = 0; });
+    state.grid.forEach(function (row) {
+      row.forEach(function (cell) {
+        if (cell.explored && cell.treasure) counts[cell.treasure]++;
+      });
+    });
+
+    var el = document.getElementById("backpack");
+    el.innerHTML = "";
+    TREASURES.forEach(function (t) {
+      var item = document.createElement("div");
+      item.className = "backpack-item";
+      item.innerHTML = t + '<span class="count">' + counts[t] + '</span>';
+      el.appendChild(item);
+    });
+  }
+
+  function formatWalkDate(iso) {
+    var d = new Date(iso);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
+      " " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+
+  function walkDistanceKm(walk) {
+    var km = 0;
+    for (var i = 1; i < walk.length; i++) km += haversineKm(walk[i - 1], walk[i]);
+    return km;
+  }
+
+  function renderWalksList() {
+    var el = document.getElementById("walk-list");
+    el.innerHTML = "";
+    state.walks.forEach(function (walk, idx) {
+      var item = document.createElement("div");
+      item.className = "walk-item";
+
+      var meta = document.createElement("div");
+      meta.className = "meta";
+      var durationMin = Math.round((new Date(walk[walk.length - 1].t) - new Date(walk[0].t)) / 60000);
+      meta.innerHTML =
+        '<span class="date">' + formatWalkDate(walk[0].t) + '</span>' +
+        '<span class="sub">' + walkDistanceKm(walk).toFixed(1) + ' km &middot; ' + durationMin + ' min</span>';
+
+      var btn = document.createElement("button");
+      btn.className = "watch-btn";
+      btn.title = "Watch this walk";
+      btn.textContent = "▶";
+      btn.addEventListener("click", function () { openPlayback(idx); });
+
+      item.appendChild(meta);
+      item.appendChild(btn);
+      el.appendChild(item);
+    });
+  }
+
+  // ---------- walk playback ----------
+
+  function pointToPercent(p) {
+    var b = state.bounds;
+    return {
+      x: ((p.lng - b.minLng) / (b.maxLng - b.minLng)) * 100,
+      y: ((b.maxLat - p.lat) / (b.maxLat - b.minLat)) * 100
+    };
+  }
+
+  function walkPointAtProgress(walk, progress) {
+    if (progress >= 1) return walk[walk.length - 1];
+    var t0 = new Date(walk[0].t).getTime();
+    var t1 = new Date(walk[walk.length - 1].t).getTime();
+    var targetT = t0 + progress * (t1 - t0);
+    for (var i = 1; i < walk.length; i++) {
+      var pt = new Date(walk[i].t).getTime();
+      if (pt >= targetT) {
+        var prevT = new Date(walk[i - 1].t).getTime();
+        var span = pt - prevT;
+        var frac = span > 0 ? (targetT - prevT) / span : 0;
+        return {
+          lat: walk[i - 1].lat + (walk[i].lat - walk[i - 1].lat) * frac,
+          lng: walk[i - 1].lng + (walk[i].lng - walk[i - 1].lng) * frac,
+          t: new Date(targetT).toISOString()
+        };
+      }
+    }
+    return walk[walk.length - 1];
+  }
+
+  function svgNS(tag) { return document.createElementNS("http://www.w3.org/2000/svg", tag); }
+
+  function openPlayback(idx) {
+    var walk = state.walks[idx];
+    if (!walk || walk.length < 2) return;
+
+    pb.walkIndex = idx;
+    pb.playing = true;
+    pb.speed = 1;
+    pb.elapsedMs = 0;
+    pb.lastFrameTime = null;
+    pb.duration = Math.min(30000, Math.max(8000, walk.length * 180));
+
+    document.querySelectorAll(".pb-speed-btn").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-speed") === "1");
+    });
+    document.getElementById("playback-playpause").textContent = "⏸";
+
+    var svg = document.getElementById("playback-svg");
+    svg.innerHTML = "";
+    var fullPts = walk.map(pointToPercent).map(function (p) { return p.x + "," + p.y; }).join(" ");
+    var fullLine = svgNS("polyline");
+    fullLine.setAttribute("points", fullPts);
+    fullLine.setAttribute("fill", "none");
+    fullLine.setAttribute("stroke", "rgba(107,74,48,0.4)");
+    fullLine.setAttribute("stroke-width", "0.8");
+    fullLine.setAttribute("stroke-dasharray", "2,1.5");
+    fullLine.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.appendChild(fullLine);
+
+    var trailLine = svgNS("polyline");
+    trailLine.setAttribute("id", "playback-trail");
+    trailLine.setAttribute("fill", "none");
+    trailLine.setAttribute("stroke", "#d98e3f");
+    trailLine.setAttribute("stroke-width", "1.2");
+    trailLine.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.appendChild(trailLine);
+
+    document.getElementById("playback-overlay").hidden = false;
+    document.getElementById("playback-scrub").value = 0;
+
+    renderPlaybackFrame(0);
+    if (pb.rafId) cancelAnimationFrame(pb.rafId);
+    pb.rafId = requestAnimationFrame(playbackStep);
+  }
+
+  function renderPlaybackFrame(progress) {
+    var walk = state.walks[pb.walkIndex];
+    if (!walk) return;
+    var current = walkPointAtProgress(walk, progress);
+    var pos = pointToPercent(current);
+
+    var marker = document.getElementById("dog-marker");
+    marker.style.left = pos.x + "%";
+    marker.style.top = pos.y + "%";
+
+    var t0 = new Date(walk[0].t).getTime();
+    var t1 = new Date(walk[walk.length - 1].t).getTime();
+    var targetT = t0 + progress * (t1 - t0);
+    var traveled = walk.filter(function (p) { return new Date(p.t).getTime() <= targetT; });
+    traveled = traveled.concat([current]);
+    var trail = document.getElementById("playback-trail");
+    if (trail) {
+      trail.setAttribute("points", traveled.map(pointToPercent).map(function (p) { return p.x + "," + p.y; }).join(" "));
+    }
+
+    document.getElementById("playback-scrub").value = Math.round(progress * 1000);
+    document.getElementById("playback-info").textContent =
+      formatWalkDate(current.t) + " (" + walkDistanceKm(traveled).toFixed(2) + " km so far)";
+  }
+
+  function playbackStep(now) {
+    if (!pb.playing) {
+      pb.rafId = null;
+      return;
+    }
+    if (pb.lastFrameTime === null) pb.lastFrameTime = now;
+    var delta = now - pb.lastFrameTime;
+    pb.lastFrameTime = now;
+
+    pb.elapsedMs += delta * pb.speed;
+    var progress = Math.min(pb.elapsedMs / pb.duration, 1);
+    renderPlaybackFrame(progress);
+
+    if (progress >= 1) {
+      pb.playing = false;
+      document.getElementById("playback-playpause").textContent = "▶";
+      pb.rafId = null;
+      return;
+    }
+
+    pb.rafId = requestAnimationFrame(playbackStep);
+  }
+
+  function closePlayback() {
+    document.getElementById("playback-overlay").hidden = true;
+    if (pb.rafId) {
+      cancelAnimationFrame(pb.rafId);
+      pb.rafId = null;
+    }
+    pb.walkIndex = null;
+    pb.playing = false;
+  }
+
+  // ---------- interactions ----------
+
+  function petDog() {
+    var sprite = document.getElementById("dog-sprite");
+    sprite.classList.remove("wag");
+    void sprite.offsetWidth; // restart animation
+    sprite.classList.add("wag");
+    var reaction = REACTIONS[Math.floor(Math.random() * REACTIONS.length)];
+    document.getElementById("reaction").textContent = reaction.replace("{name}", state.dogName);
+  }
+
+  function setDogName(name) {
+    name = (name || "").trim() || DEFAULT_DOG_NAME;
+    state.dogName = name;
+    document.getElementById("header-dog-name").textContent = name;
+    document.getElementById("dog-zone-name").textContent = name;
+  }
+
+  function setDataMsg(text, ok) {
+    var el = document.getElementById("data-msg");
+    el.textContent = text;
+    el.className = "data-msg " + (ok ? "ok" : "err");
+  }
+
+  function validatePoints(data) {
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error("Expected a non-empty JSON array of points.");
+    }
+    data.forEach(function (p, i) {
+      if (typeof p.lat !== "number" || typeof p.lng !== "number" || !p.t) {
+        throw new Error("Point " + i + ' is missing "lat", "lng", or "t".');
+      }
+      if (isNaN(new Date(p.t).getTime())) {
+        throw new Error('Point ' + i + ' has an unparseable "t" timestamp.');
+      }
+    });
+    return data;
+  }
+
+  function loadJsonText(text) {
+    try {
+      var data = JSON.parse(text);
+      data = validatePoints(data);
+      buildFromPoints(data);
+      setDataMsg("Loaded " + data.length + " points across " + state.walks.length + " walk(s).", true);
+    } catch (err) {
+      setDataMsg("Couldn't load that data: " + err.message, false);
+    }
+  }
+
+  document.getElementById("pet-btn").addEventListener("click", petDog);
+
+  document.getElementById("dog-name-input").addEventListener("input", function (e) {
+    setDogName(e.target.value);
+  });
+
+  document.getElementById("playback-close").addEventListener("click", closePlayback);
+
+  document.getElementById("playback-playpause").addEventListener("click", function () {
+    if (pb.walkIndex === null) return;
+    if (!pb.playing && pb.elapsedMs >= pb.duration) {
+      pb.elapsedMs = 0; // restart after finishing
+    }
+    pb.playing = !pb.playing;
+    pb.lastFrameTime = null;
+    document.getElementById("playback-playpause").textContent = pb.playing ? "⏸" : "▶";
+    if (pb.playing) {
+      if (pb.rafId) cancelAnimationFrame(pb.rafId);
+      pb.rafId = requestAnimationFrame(playbackStep);
+    }
+  });
+
+  document.getElementById("playback-scrub").addEventListener("input", function (e) {
+    if (pb.walkIndex === null) return;
+    pb.playing = false;
+    document.getElementById("playback-playpause").textContent = "▶";
+    var progress = Number(e.target.value) / 1000;
+    pb.elapsedMs = progress * pb.duration;
+    renderPlaybackFrame(progress);
+  });
+
+  document.querySelectorAll(".pb-speed-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      pb.speed = Number(btn.getAttribute("data-speed"));
+      document.querySelectorAll(".pb-speed-btn").forEach(function (b) {
+        b.classList.toggle("active", b === btn);
+      });
+    });
+  });
+
+  document.getElementById("load-json-btn").addEventListener("click", function () {
+    var text = document.getElementById("json-input").value.trim();
+    if (!text) {
+      setDataMsg("Paste some JSON first.", false);
+      return;
+    }
+    loadJsonText(text);
+  });
+
+  document.getElementById("json-file").addEventListener("change", function (e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (evt) {
+      document.getElementById("json-input").value = evt.target.result;
+      loadJsonText(evt.target.result);
+    };
+    reader.onerror = function () {
+      setDataMsg("Couldn't read that file.", false);
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById("reset-demo-btn").addEventListener("click", function () {
+    document.getElementById("json-input").value = "";
+    buildFromPoints(generateMockData());
+    setDataMsg("Demo data restored.", true);
+  });
+
+  // ---------- init ----------
+
+  setDogName(DEFAULT_DOG_NAME);
+  buildFromPoints(generateMockData());
+})();
+</script>
+</body>
+</html>
