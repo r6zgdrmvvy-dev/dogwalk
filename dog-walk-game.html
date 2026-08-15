@@ -6,7 +6,7 @@
 <title>A Walk With Your Dog</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Quicksand:wght@400;500;600;700&family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
   :root {
     --cream: #fbf1de;
@@ -23,6 +23,20 @@
     --panel: #fffaf0;
     --ink: #4a3220;
     --shadow: rgba(74, 50, 32, 0.25);
+
+    /* NES-Zelda-overworld terrain palette, used for explored map tiles */
+    --z-field: #4aa42e;
+    --z-field-dark: #3a8322;
+    --z-park: #7ec850;
+    --z-park-dark: #63a63b;
+    --z-forest: #1f6b2c;
+    --z-forest-dark: #144d1f;
+    --z-water: #3a6fd8;
+    --z-water-dark: #274ea3;
+    --z-road: #c9a24a;
+    --z-road-dark: #a9843a;
+    --z-bezel: #6b4a30;
+    --z-bezel-dark: #3a2515;
   }
 
   * { box-sizing: border-box; }
@@ -49,10 +63,11 @@
   }
 
   header h1 {
-    font-family: 'Baloo 2', cursive;
-    font-size: clamp(28px, 5vw, 44px);
+    font-family: 'Press Start 2P', 'Baloo 2', cursive;
+    font-size: clamp(16px, 3.4vw, 28px);
     color: var(--brown-dark);
-    margin: 0 0 6px;
+    margin: 0 0 12px;
+    line-height: 1.6;
     text-shadow: 2px 2px 0 rgba(255,255,255,0.5);
   }
 
@@ -133,9 +148,14 @@
   .grid-wrap {
     position: relative;
     aspect-ratio: 14 / 8;
-    background: var(--brown);
-    border-radius: 10px;
+    background: var(--z-bezel-dark);
+    border: 5px solid var(--z-bezel);
+    box-shadow:
+      0 0 0 2px var(--z-bezel-dark),
+      inset 0 0 0 2px rgba(255, 216, 130, 0.5);
+    border-radius: 2px;
     overflow: hidden;
+    image-rendering: pixelated;
   }
 
   .grid {
@@ -143,7 +163,8 @@
     inset: 0;
     display: grid;
     grid-template-columns: repeat(14, 1fr);
-    gap: 2px;
+    gap: 1px;
+    background: var(--z-bezel-dark);
   }
 
   .cell {
@@ -153,7 +174,7 @@
     align-items: center;
     justify-content: center;
     font-size: clamp(10px, 1.6vw, 20px);
-    transition: background 0.4s ease, transform 0.2s ease;
+    transition: background 0.4s ease;
   }
 
   .cell.unexplored {
@@ -161,20 +182,62 @@
   }
 
   .cell.explored {
-    background: var(--grass);
-    animation: reveal 0.5s ease;
+    background: var(--z-field);
+    animation: reveal 0.4s ease;
+  }
+
+  .cell.explored.terrain-park { background: var(--z-park); }
+  .cell.explored.terrain-forest {
+    background:
+      radial-gradient(circle at 30% 30%, var(--z-forest-dark) 0 18%, transparent 19%),
+      radial-gradient(circle at 70% 60%, var(--z-forest-dark) 0 18%, transparent 19%),
+      var(--z-forest);
+  }
+  .cell.explored.terrain-water {
+    background: repeating-linear-gradient(90deg, var(--z-water) 0 60%, var(--z-water-dark) 60% 100%);
+    background-size: 16px 100%;
+  }
+  .cell.explored.terrain-road {
+    background:
+      linear-gradient(90deg, transparent 44%, var(--z-road-dark) 44% 56%, transparent 56%),
+      var(--z-field);
   }
 
   .cell.explored::after {
     content: "";
     position: absolute;
     inset: 0;
-    background: repeating-linear-gradient(90deg, transparent, transparent 8px, rgba(0,0,0,0.03) 8px, rgba(0,0,0,0.03) 16px);
+    background: repeating-linear-gradient(90deg, transparent, transparent 8px, rgba(0,0,0,0.05) 8px, rgba(0,0,0,0.05) 16px);
+  }
+
+  /* Roads and streams are thin real-world features overlaid on the base terrain tile,
+     rather than a terrain type of their own — see classifyTerrainFromWays(). */
+  .cell.has-road::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, transparent 46%, rgba(201, 162, 74, 0.9) 46%, rgba(201, 162, 74, 0.9) 54%, transparent 54%);
+  }
+
+  .cell.has-stream::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(45deg, transparent 46%, rgba(58, 111, 216, 0.85) 46%, rgba(58, 111, 216, 0.85) 54%, transparent 54%);
+  }
+
+  .cell.has-road.has-stream::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(135deg, transparent 46%, rgba(201, 162, 74, 0.9) 46%, rgba(201, 162, 74, 0.9) 54%, transparent 54%),
+      linear-gradient(45deg, transparent 46%, rgba(58, 111, 216, 0.85) 46%, rgba(58, 111, 216, 0.85) 54%, transparent 54%);
   }
 
   @keyframes reveal {
-    from { background: var(--fog); transform: scale(0.85); }
-    to { background: var(--grass); transform: scale(1); }
+    from { transform: scale(0.8); opacity: 0.4; }
+    to { transform: scale(1); opacity: 1; }
   }
 
   .cell .marker {
@@ -333,12 +396,21 @@
   .legend {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px 18px;
+    gap: 8px 14px;
     margin-top: 10px;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--brown);
     justify-content: center;
+  }
+
+  .terrain-status {
+    margin-top: 6px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--amber-dark);
+    min-height: 14px;
   }
 
   .side {
@@ -526,9 +598,14 @@
         <div class="legend">
           <span>🏡 home</span>
           <span>🐾 last spotted</span>
-          <span>🟩 explored</span>
+          <span>🟩 field</span>
+          <span>🌲 forest</span>
+          <span>🟦 water</span>
+          <span>🟨 road</span>
+          <span>〰️ stream</span>
           <span>▦ unexplored</span>
         </div>
+        <div class="terrain-status" id="terrain-status"></div>
       </div>
 
       <div class="side">
@@ -745,7 +822,7 @@
     for (var r = 0; r < GRID_ROWS; r++) {
       var row = [];
       for (var c = 0; c < GRID_COLS; c++) {
-        row.push({ explored: false, treasure: null });
+        row.push({ explored: false, treasure: null, terrain: "field", road: false, stream: false });
       }
       grid.push(row);
     }
@@ -769,6 +846,252 @@
 
     state.grid = grid;
     render();
+    loadTerrainForCurrentBounds();
+  }
+
+  // ---------- real-world terrain (OpenStreetMap via Overpass) ----------
+
+  var OVERPASS_ENDPOINTS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter"
+  ];
+  var TERRAIN_CACHE_PREFIX = "dogwalk_terrain_v1_";
+  var TERRAIN_CACHE_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
+  // Base tile types (mutually exclusive, one per cell). Roads and streams are
+  // thin linear features almost every cell touches somewhere — treated as
+  // overlays instead, or they'd paint the whole map as one dominant color.
+  var TERRAIN_PRIORITY = { water: 3, forest: 2, park: 1, field: 0 };
+  var OVERLAY_KINDS = { road: true, stream: true };
+  var TERRAIN_FETCH_TIMEOUT_MS = 12000;
+
+  function terrainCacheKey(bounds) {
+    return TERRAIN_CACHE_PREFIX + [bounds.minLat, bounds.minLng, bounds.maxLat, bounds.maxLng]
+      .map(function (n) { return n.toFixed(4); }).join("_");
+  }
+
+  function buildOverpassQuery(bounds) {
+    var bbox = bounds.minLat + "," + bounds.minLng + "," + bounds.maxLat + "," + bounds.maxLng;
+    return "[out:json][timeout:20];(" +
+      'way["natural"="water"](' + bbox + ');' +
+      'way["waterway"~"river|stream|canal"](' + bbox + ');' +
+      'way["landuse"~"forest|grass|meadow|recreation_ground"](' + bbox + ');' +
+      'way["natural"="wood"](' + bbox + ');' +
+      'way["leisure"~"park|golf_course|nature_reserve"](' + bbox + ');' +
+      'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street)$"](' + bbox + ');' +
+      ");out geom;";
+  }
+
+  function classifyWayTags(tags) {
+    tags = tags || {};
+    if (tags.natural === "water" || tags.waterway === "river" || tags.waterway === "canal") return "water";
+    if (tags.waterway) return "stream"; // minor burns/drains — overlay, not a base tile
+    if (tags.landuse === "forest" || tags.natural === "wood" || tags.leisure === "nature_reserve") return "forest";
+    if (tags.leisure === "park" || tags.leisure === "golf_course" ||
+        tags.landuse === "recreation_ground" || tags.landuse === "grass" || tags.landuse === "meadow") return "park";
+    if (tags.highway) return "road"; // overlay, not a base tile — see OVERLAY_KINDS
+    return null;
+  }
+
+  function wayBBox(way) {
+    var lats = way.geometry.map(function (p) { return p.lat; });
+    var lngs = way.geometry.map(function (p) { return p.lon; });
+    return {
+      minLat: Math.min.apply(null, lats), maxLat: Math.max.apply(null, lats),
+      minLng: Math.min.apply(null, lngs), maxLng: Math.max.apply(null, lngs)
+    };
+  }
+
+  function cellBounds(row, col, b) {
+    var latRange = b.maxLat - b.minLat;
+    var lngRange = b.maxLng - b.minLng;
+    return {
+      minLat: b.maxLat - ((row + 1) / GRID_ROWS) * latRange,
+      maxLat: b.maxLat - (row / GRID_ROWS) * latRange,
+      minLng: b.minLng + (col / GRID_COLS) * lngRange,
+      maxLng: b.minLng + ((col + 1) / GRID_COLS) * lngRange
+    };
+  }
+
+  function rectsOverlap(a, b) {
+    return a.minLat <= b.maxLat && a.maxLat >= b.minLat && a.minLng <= b.maxLng && a.maxLng >= b.minLng;
+  }
+
+  function pointToCellUnclamped(lat, lng, bounds) {
+    if (lat < bounds.minLat || lat > bounds.maxLat || lng < bounds.minLng || lng > bounds.maxLng) return null;
+    var latRange = bounds.maxLat - bounds.minLat;
+    var lngRange = bounds.maxLng - bounds.minLng;
+    var row = Math.min(Math.floor(((bounds.maxLat - lat) / latRange) * GRID_ROWS), GRID_ROWS - 1);
+    var col = Math.min(Math.floor(((lng - bounds.minLng) / lngRange) * GRID_COLS), GRID_COLS - 1);
+    return { row: row, col: col };
+  }
+
+  function isClosedWay(way) {
+    var g = way.geometry;
+    if (g.length < 3) return false;
+    var first = g[0], last = g[g.length - 1];
+    return Math.abs(first.lat - last.lat) < 1e-9 && Math.abs(first.lon - last.lon) < 1e-9;
+  }
+
+  // Standard ray-casting point-in-polygon test (lng=x, lat=y).
+  function pointInPolygon(lat, lng, ring) {
+    var inside = false;
+    for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      var yi = ring[i].lat, xi = ring[i].lon;
+      var yj = ring[j].lat, xj = ring[j].lon;
+      var intersect = ((yi > lat) !== (yj > lat)) &&
+        (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function cellCenter(row, col, bounds) {
+    var latRange = bounds.maxLat - bounds.minLat;
+    var lngRange = bounds.maxLng - bounds.minLng;
+    return {
+      lat: bounds.maxLat - ((row + 0.5) / GRID_ROWS) * latRange,
+      lng: bounds.minLng + ((col + 0.5) / GRID_COLS) * lngRange
+    };
+  }
+
+  // Builds the base terrain grid (one dominant type per cell) plus separate
+  // road/stream overlay flags, from raw Overpass ways.
+  //
+  // Area features (forest/park/water polygons) only count toward a cell if
+  // the cell's CENTER falls inside the polygon — using "any vertex touches
+  // this cell" instead wildly over-counts, since a scattered small woodland
+  // polygon's boundary can clip several neighbouring cells without actually
+  // covering most of any of them. Line features (roads, rivers, streams)
+  // trace through cells via their vertices instead, since that's how a thin
+  // linear feature's path is actually represented.
+  function classifyTerrainFromWays(ways, bounds) {
+    var terrain = [], road = [], stream = [];
+    for (var r = 0; r < GRID_ROWS; r++) {
+      var tRow = [], rRow = [], sRow = [];
+      for (var c = 0; c < GRID_COLS; c++) { tRow.push("field"); rRow.push(false); sRow.push(false); }
+      terrain.push(tRow); road.push(rRow); stream.push(sRow);
+    }
+
+    function markCell(r, c, kind) {
+      if (TERRAIN_PRIORITY[kind] > TERRAIN_PRIORITY[terrain[r][c]]) terrain[r][c] = kind;
+    }
+
+    ways.forEach(function (way) {
+      if (!way.geometry || way.geometry.length < 2) return;
+      var kind = classifyWayTags(way.tags);
+      if (!kind) return;
+
+      if (OVERLAY_KINDS[kind]) {
+        way.geometry.forEach(function (pt) {
+          var cell = pointToCellUnclamped(pt.lat, pt.lon, bounds);
+          if (cell) (kind === "road" ? road : stream)[cell.row][cell.col] = true;
+        });
+        return;
+      }
+
+      if (isClosedWay(way)) {
+        var wbbox = wayBBox(way);
+        for (var r = 0; r < GRID_ROWS; r++) {
+          for (var c = 0; c < GRID_COLS; c++) {
+            if (terrain[r][c] === kind) continue;
+            if (!rectsOverlap(wbbox, cellBounds(r, c, bounds))) continue;
+            var center = cellCenter(r, c, bounds);
+            if (pointInPolygon(center.lat, center.lng, way.geometry)) markCell(r, c, kind);
+          }
+        }
+      } else {
+        way.geometry.forEach(function (pt) {
+          var cell = pointToCellUnclamped(pt.lat, pt.lon, bounds);
+          if (cell) markCell(cell.row, cell.col, kind);
+        });
+      }
+    });
+
+    return { terrain: terrain, road: road, stream: stream };
+  }
+
+  function readTerrainCache(key) {
+    try {
+      var raw = localStorage.getItem(key);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      if (Date.now() - parsed.fetchedAt > TERRAIN_CACHE_MAX_AGE_MS) return null;
+      return parsed.terrain;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeTerrainCache(key, terrain) {
+    try {
+      localStorage.setItem(key, JSON.stringify({ terrain: terrain, fetchedAt: Date.now() }));
+    } catch (e) {
+      // storage unavailable/full — not fatal, just skip caching
+    }
+  }
+
+  function fetchOverpassWays(query) {
+    var attempt = function (i) {
+      if (i >= OVERPASS_ENDPOINTS.length) return Promise.resolve(null);
+      var controller = new AbortController();
+      var timer = setTimeout(function () { controller.abort(); }, TERRAIN_FETCH_TIMEOUT_MS);
+      return fetch(OVERPASS_ENDPOINTS[i], {
+        method: "POST",
+        body: "data=" + encodeURIComponent(query),
+        signal: controller.signal
+      }).then(function (resp) {
+        clearTimeout(timer);
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return resp.json();
+      }).then(function (data) {
+        return data.elements || [];
+      }).catch(function () {
+        clearTimeout(timer);
+        return attempt(i + 1);
+      });
+    };
+    return attempt(0);
+  }
+
+  function setTerrainStatus(text) {
+    document.getElementById("terrain-status").textContent = text || "";
+  }
+
+  function loadTerrainForCurrentBounds() {
+    var boundsSnapshot = state.bounds;
+    var cacheKey = terrainCacheKey(boundsSnapshot);
+
+    var cached = readTerrainCache(cacheKey);
+    if (cached) {
+      applyTerrain(boundsSnapshot, cached);
+      return;
+    }
+
+    setTerrainStatus("Mapping the real neighbourhood…");
+    fetchOverpassWays(buildOverpassQuery(boundsSnapshot)).then(function (ways) {
+      if (state.bounds !== boundsSnapshot) return; // a newer load superseded this one
+      if (!ways) {
+        setTerrainStatus("Real map data unavailable right now — showing a generic map.");
+        return;
+      }
+      var result = classifyTerrainFromWays(ways, boundsSnapshot);
+      writeTerrainCache(cacheKey, result);
+      applyTerrain(boundsSnapshot, result);
+    });
+  }
+
+  function applyTerrain(boundsSnapshot, result) {
+    if (state.bounds !== boundsSnapshot) return;
+    for (var r = 0; r < GRID_ROWS; r++) {
+      for (var c = 0; c < GRID_COLS; c++) {
+        state.grid[r][c].terrain = result.terrain[r][c];
+        state.grid[r][c].road = result.road[r][c];
+        state.grid[r][c].stream = result.stream[r][c];
+      }
+    }
+    setTerrainStatus("");
+    renderGrid();
   }
 
   // ---------- rendering ----------
@@ -794,7 +1117,9 @@
       for (var c = 0; c < GRID_COLS; c++) {
         var g = state.grid[r][c];
         var cellEl = document.createElement("div");
-        cellEl.className = "cell " + (g.explored ? "explored" : "unexplored");
+        cellEl.className = "cell " + (g.explored ? "explored terrain-" + g.terrain : "unexplored");
+        if (g.explored && g.road) cellEl.classList.add("has-road");
+        if (g.explored && g.stream) cellEl.classList.add("has-stream");
 
         var isHome = r === homeCell.row && c === homeCell.col;
         var isLast = r === lastCell.row && c === lastCell.col;
