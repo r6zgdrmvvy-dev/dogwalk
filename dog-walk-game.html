@@ -805,7 +805,10 @@
     return points;
   }
 
-  function generateMockData() {
+  // Fallback demo generator: an abstract spiral, used only if we can't fetch
+  // a real street network for the demo (offline, Overpass down, etc). Doesn't
+  // resemble any real place — see generateRoadWalks() for the real thing.
+  function generateFallbackMockData() {
     var points = [];
     var now = new Date();
     for (var w = 0; w < 7; w++) {
@@ -816,6 +819,164 @@
       points = points.concat(mockWalk(w + 1, start, duration));
     }
     return points;
+  }
+
+  // ---------- demo walks that actually follow real streets/paths ----------
+  //
+  // A believable demo has to look like a dog was actually walked somewhere —
+  // real streets and footpaths, not a mathematical spiral cutting through
+  // gardens. This fetches the real path/street network around MOCK_CENTER,
+  // builds a graph from it, and generates walk routes by random-walking
+  // along real, connected roads and footpaths.
+
+  var DEMO_BOUNDS = {
+    minLat: MOCK_CENTER.lat - 0.011, maxLat: MOCK_CENTER.lat + 0.011,
+    minLng: MOCK_CENTER.lng - 0.018, maxLng: MOCK_CENTER.lng + 0.018
+  };
+  var DEMO_GRAPH_CACHE_KEY = "dogwalk_demo_graph_v1";
+  var DEMO_GRAPH_CACHE_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
+  var cachedWalkGraph = null;
+
+  function buildWalkableQuery(bounds) {
+    var bbox = bounds.minLat + "," + bounds.minLng + "," + bounds.maxLat + "," + bounds.maxLng;
+    return "[out:json][timeout:20];(" +
+      'way["highway"~"^(residential|living_street|footway|path|cycleway|pedestrian|track|unclassified|tertiary|secondary)$"]' +
+      '["footway"!="crossing"](' + bbox + ');' +
+      ");out geom;";
+  }
+
+  function nodeKey(lat, lng) {
+    return lat.toFixed(6) + "," + lng.toFixed(6);
+  }
+
+  function buildWalkGraph(ways) {
+    var graph = {};
+    ways.forEach(function (way) {
+      if (!way.geometry || way.geometry.length < 2) return;
+      for (var i = 0; i < way.geometry.length - 1; i++) {
+        var a = way.geometry[i], b = way.geometry[i + 1];
+        var ka = nodeKey(a.lat, a.lon), kb = nodeKey(b.lat, b.lon);
+        if (!graph[ka]) graph[ka] = { lat: a.lat, lng: a.lon, edges: [] };
+        if (!graph[kb]) graph[kb] = { lat: b.lat, lng: b.lon, edges: [] };
+        var dist = haversineKm({ lat: a.lat, lng: a.lon }, { lat: b.lat, lng: b.lon });
+        if (dist <= 0) continue;
+        graph[ka].edges.push({ to: kb, dist: dist });
+        graph[kb].edges.push({ to: ka, dist: dist });
+      }
+    });
+    return graph;
+  }
+
+  function nearestGraphNode(graph, point) {
+    var bestKey = null, bestDist = Infinity;
+    Object.keys(graph).forEach(function (k) {
+      var n = graph[k];
+      var d = haversineKm(point, { lat: n.lat, lng: n.lng });
+      if (d < bestDist) { bestDist = d; bestKey = k; }
+    });
+    return bestKey;
+  }
+
+  // Random-walks the graph from startKey until it's covered roughly
+  // targetKm, avoiding immediate backtracking so the route reads as a loop
+  // rather than jittering back and forth on one edge.
+  function walkRoute(graph, startKey, targetKm, seed) {
+    var path = [graph[startKey]];
+    var current = startKey;
+    var prev = null;
+    var total = 0;
+    var steps = 0;
+    while (total < targetKm && steps < 4000) {
+      steps++;
+      var node = graph[current];
+      if (!node || !node.edges.length) break;
+      var candidates = node.edges.filter(function (e) { return e.to !== prev; });
+      if (!candidates.length) candidates = node.edges;
+      var pick = candidates[Math.floor(seededRandom(seed + steps * 7.13) * candidates.length)];
+      prev = current;
+      current = pick.to;
+      total += pick.dist;
+      path.push(graph[current]);
+    }
+    return path;
+  }
+
+  function routeToPoints(route, startTime, durationMin) {
+    var t0 = startTime.getTime();
+    var stepMs = route.length > 1 ? (durationMin * 60 * 1000) / (route.length - 1) : 0;
+    return route.map(function (n, i) {
+      return { lat: n.lat, lng: n.lng, t: new Date(t0 + i * stepMs).toISOString() };
+    });
+  }
+
+  function generateRoadWalks(graph) {
+    var startKey = nearestGraphNode(graph, MOCK_CENTER);
+    if (!startKey) return null;
+
+    var points = [];
+    var now = new Date();
+    var walkingKmPerMin = 0.055; // roughly a dog's ambling pace
+    for (var w = 0; w < 7; w++) {
+      var daysAgo = w * 2 + Math.floor(seededRandom(w * 7.3) * 1.5);
+      var start = new Date(now.getTime() - daysAgo * 24 * 3600 * 1000);
+      start.setHours(7 + Math.floor(seededRandom(w * 11) * 10), Math.floor(seededRandom(w) * 60), 0, 0);
+      var duration = 18 + Math.floor(seededRandom(w * 4.2) * 25);
+      var targetKm = duration * walkingKmPerMin;
+      var route = walkRoute(graph, startKey, targetKm, w * 101 + 1);
+      if (route.length > 1) {
+        points = points.concat(routeToPoints(route, start, duration));
+      }
+    }
+    return points.length ? points : null;
+  }
+
+  function readDemoGraphCache() {
+    try {
+      var raw = localStorage.getItem(DEMO_GRAPH_CACHE_KEY);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      if (Date.now() - parsed.fetchedAt > DEMO_GRAPH_CACHE_MAX_AGE_MS) return null;
+      return parsed.graph;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeDemoGraphCache(graph) {
+    try {
+      localStorage.setItem(DEMO_GRAPH_CACHE_KEY, JSON.stringify({ graph: graph, fetchedAt: Date.now() }));
+    } catch (e) {
+      // ignore — not fatal
+    }
+  }
+
+  // Loads (or reuses) the real street/path graph and rebuilds the demo with
+  // routes that actually follow it. Falls back silently to the abstract
+  // spiral if the network is unreachable.
+  function loadRoadBasedDemo() {
+    if (cachedWalkGraph) {
+      var points = generateRoadWalks(cachedWalkGraph);
+      if (points) buildFromPoints(points);
+      return;
+    }
+
+    var cached = readDemoGraphCache();
+    if (cached && Object.keys(cached).length > 20) {
+      cachedWalkGraph = cached;
+      var cachedPoints = generateRoadWalks(cachedWalkGraph);
+      if (cachedPoints) buildFromPoints(cachedPoints);
+      return;
+    }
+
+    fetchOverpassWays(buildWalkableQuery(DEMO_BOUNDS)).then(function (ways) {
+      if (!ways || ways.length < 5) return; // keep showing the spiral fallback
+      var graph = buildWalkGraph(ways);
+      if (Object.keys(graph).length < 20) return;
+      cachedWalkGraph = graph;
+      writeDemoGraphCache(graph);
+      var points = generateRoadWalks(graph);
+      if (points) buildFromPoints(points);
+    });
   }
 
   // ---------- core build ----------
@@ -1488,14 +1649,21 @@
 
   document.getElementById("reset-demo-btn").addEventListener("click", function () {
     document.getElementById("json-input").value = "";
-    buildFromPoints(generateMockData());
+    if (cachedWalkGraph) {
+      var points = generateRoadWalks(cachedWalkGraph);
+      buildFromPoints(points || generateFallbackMockData());
+    } else {
+      buildFromPoints(generateFallbackMockData());
+      loadRoadBasedDemo();
+    }
     setDataMsg("Demo data restored.", true);
   });
 
   // ---------- init ----------
 
   setDogName(DEFAULT_DOG_NAME);
-  buildFromPoints(generateMockData());
+  buildFromPoints(generateFallbackMockData());
+  loadRoadBasedDemo();
 })();
 </script>
 </body>
