@@ -223,7 +223,7 @@
       <button class="btn primary" id="btn-load">Load pasted</button>
       <label class="btn" for="json-file">Load file…</label>
       <input type="file" id="json-file" accept="application/json,.json">
-      <button class="btn" id="btn-demo">Reset to demo</button>
+      <button class="btn" id="btn-demo">Reset to samples</button>
       <button class="btn" id="btn-close-data" style="margin-left:auto">Close</button>
     </div>
     <div id="data-msg"></div>
@@ -247,7 +247,6 @@
 
   var TREASURE_CHANCE = 0.22;
   var TREASURES = ["🌰", "🦴", "🍂", "🎾", "🪵", "💭"];
-  var MOCK_CENTER = { lat: 55.7936, lng: -4.2934 };
 
   var GRID_COLS = 28, GRID_ROWS = 16;   // coarse grid, only for the explored %
 
@@ -415,10 +414,13 @@
     return computeBounds(walk && walk.length ? walk : state.points);
   }
 
-  function buildFromPoints(points) {
+  // `presplit` is for data that already knows where its walks are — the
+  // bundled samples. Rederiving them would mean finding "home" from points
+  // that are, by definition, all away from it.
+  function buildFromPoints(points, presplit) {
     if (!points.length) return;
     state.points = points.slice().sort(function (a, b) { return new Date(a.t) - new Date(b.t); });
-    state.walks = splitIntoWalks(state.points);
+    state.walks = presplit && presplit.length ? presplit : splitIntoWalks(state.points);
     // The world is built around ONE walk, not around every walk ever recorded.
     // A month of real tracker data spans several kilometres once the odd day
     // trip is included, and a world that size has to be drawn at ten-plus
@@ -496,89 +498,130 @@
       ");out geom;";
   }
 
-  // ---- demo walks that follow real streets ----
-
-  function walkableQuery(b) {
-    var bbox = (b.lat - 0.011) + "," + (b.lng - 0.018) + "," + (b.lat + 0.011) + "," + (b.lng + 0.018);
-    return "[out:json][timeout:20];(" +
-      'way["highway"~"^(residential|living_street|footway|path|cycleway|pedestrian|unclassified|tertiary)$"]' +
-      '["footway"!="crossing"](' + bbox + ');' +
-      ");out geom;";
-  }
-
-  function buildGraph(ways) {
-    var g = {};
-    var key = function (la, ln) { return la.toFixed(6) + "," + ln.toFixed(6); };
-    ways.forEach(function (w) {
-      if (!w.geometry || w.geometry.length < 2) return;
-      for (var i = 0; i < w.geometry.length - 1; i++) {
-        var a = w.geometry[i], b = w.geometry[i + 1];
-        var ka = key(a.lat, a.lon), kb = key(b.lat, b.lon);
-        if (!g[ka]) g[ka] = { lat: a.lat, lng: a.lon, edges: [] };
-        if (!g[kb]) g[kb] = { lat: b.lat, lng: b.lon, edges: [] };
-        var d = haversineKm({ lat: a.lat, lng: a.lon }, { lat: b.lat, lng: b.lon });
-        if (d <= 0) continue;
-        g[ka].edges.push({ to: kb, dist: d });
-        g[kb].edges.push({ to: ka, dist: d });
-      }
-    });
-    return g;
-  }
-
-  function demoWalksFromGraph(graph) {
-    var best = null, bestD = Infinity;
-    Object.keys(graph).forEach(function (k) {
-      var d = haversineKm(MOCK_CENTER, graph[k]);
-      if (d < bestD) { bestD = d; best = k; }
-    });
-    if (!best) return null;
-
-    var points = [], now = new Date();
-    for (var w = 0; w < 7; w++) {
-      var daysAgo = w * 2 + Math.floor(seededRandom(w * 7.3) * 1.5);
-      var start = new Date(now.getTime() - daysAgo * 86400000);
-      start.setHours(7 + Math.floor(seededRandom(w * 11) * 10), Math.floor(seededRandom(w) * 60), 0, 0);
-      var minutes = 18 + Math.floor(seededRandom(w * 4.2) * 25);
-      var target = minutes * 0.055;
-
-      var path = [graph[best]], cur = best, prev = null, total = 0, steps = 0;
-      while (total < target && steps < 4000) {
-        steps++;
-        var node = graph[cur];
-        if (!node || !node.edges.length) break;
-        var opts = node.edges.filter(function (e) { return e.to !== prev; });
-        if (!opts.length) opts = node.edges;
-        var pickEdge = opts[Math.floor(seededRandom(w * 101 + steps * 7.13) * opts.length)];
-        prev = cur; cur = pickEdge.to; total += pickEdge.dist;
-        path.push(graph[cur]);
-      }
-      if (path.length < 2) continue;
-      var stepMs = (minutes * 60000) / (path.length - 1);
-      path.forEach(function (n, i) {
-        points.push({ lat: n.lat, lng: n.lng, t: new Date(start.getTime() + i * stepMs).toISOString() });
-      });
-    }
-    return points.length ? points : null;
-  }
-
-  function fallbackWalks() {
-    var points = [], now = new Date();
-    for (var w = 0; w < 7; w++) {
-      var start = new Date(now.getTime() - w * 2 * 86400000);
-      start.setHours(8, 0, 0, 0);
-      var n = 70;
-      for (var i = 0; i < n; i++) {
-        var a = (i / n) * Math.PI * 5 + w;
-        var rad = 0.004 + (i / n) * 0.006;
-        points.push({
-          lat: MOCK_CENTER.lat + Math.sin(a) * rad * 0.62,
-          lng: MOCK_CENTER.lng + Math.cos(a) * rad,
-          t: new Date(start.getTime() + i * 25000).toISOString()
-        });
-      }
-    }
-    return points;
-  }
+  // Two of Guinness's real walks around Giffnock, straight from a Tractive
+  // export: a long wander through Rouken Glen, and a morning round the
+  // streets. They ship with the page so it has something true to play on
+  // first load — "Load data" replaces them with your own dog's.
+  var SAMPLE_WALKS = [
+    [
+      {"lat":55.795762,"lng":-4.310625,"t":"2026-07-19T09:12:23Z"},
+      {"lat":55.795722,"lng":-4.311297,"t":"2026-07-19T09:14:51Z"},
+      {"lat":55.795641,"lng":-4.311739,"t":"2026-07-19T09:17:22Z"},
+      {"lat":55.794914,"lng":-4.312267,"t":"2026-07-19T09:19:50Z"},
+      {"lat":55.794293,"lng":-4.312425,"t":"2026-07-19T09:22:18Z"},
+      {"lat":55.793979,"lng":-4.313054,"t":"2026-07-19T09:24:47Z"},
+      {"lat":55.793552,"lng":-4.313813,"t":"2026-07-19T09:27:18Z"},
+      {"lat":55.792767,"lng":-4.315060,"t":"2026-07-19T09:29:50Z"},
+      {"lat":55.792705,"lng":-4.314762,"t":"2026-07-19T09:32:17Z"},
+      {"lat":55.792661,"lng":-4.314829,"t":"2026-07-19T09:34:48Z"},
+      {"lat":55.792891,"lng":-4.314705,"t":"2026-07-19T09:37:18Z"},
+      {"lat":55.792723,"lng":-4.314530,"t":"2026-07-19T09:39:49Z"},
+      {"lat":55.792686,"lng":-4.314464,"t":"2026-07-19T09:42:17Z"},
+      {"lat":55.791586,"lng":-4.315351,"t":"2026-07-19T09:44:50Z"},
+      {"lat":55.791276,"lng":-4.313155,"t":"2026-07-19T09:47:19Z"},
+      {"lat":55.792442,"lng":-4.312616,"t":"2026-07-19T09:49:49Z"},
+      {"lat":55.792541,"lng":-4.312920,"t":"2026-07-19T09:52:19Z"},
+      {"lat":55.792600,"lng":-4.312840,"t":"2026-07-19T09:54:48Z"},
+      {"lat":55.792614,"lng":-4.312845,"t":"2026-07-19T09:57:18Z"},
+      {"lat":55.792534,"lng":-4.312801,"t":"2026-07-19T09:59:50Z"},
+      {"lat":55.792640,"lng":-4.312860,"t":"2026-07-19T10:02:18Z"},
+      {"lat":55.792700,"lng":-4.312811,"t":"2026-07-19T10:04:48Z"},
+      {"lat":55.792517,"lng":-4.312950,"t":"2026-07-19T10:07:20Z"},
+      {"lat":55.792611,"lng":-4.312780,"t":"2026-07-19T10:09:48Z"},
+      {"lat":55.792646,"lng":-4.312899,"t":"2026-07-19T10:12:18Z"},
+      {"lat":55.792843,"lng":-4.312720,"t":"2026-07-19T10:14:48Z"},
+      {"lat":55.792678,"lng":-4.312815,"t":"2026-07-19T10:17:19Z"},
+      {"lat":55.792694,"lng":-4.312813,"t":"2026-07-19T10:19:49Z"},
+      {"lat":55.793230,"lng":-4.313027,"t":"2026-07-19T10:22:21Z"},
+      {"lat":55.792500,"lng":-4.314933,"t":"2026-07-19T10:24:54Z"},
+      {"lat":55.792139,"lng":-4.316085,"t":"2026-07-19T10:27:18Z"},
+      {"lat":55.792432,"lng":-4.316442,"t":"2026-07-19T10:29:48Z"},
+      {"lat":55.792492,"lng":-4.315740,"t":"2026-07-19T10:32:29Z"},
+      {"lat":55.793341,"lng":-4.315737,"t":"2026-07-19T10:34:59Z"},
+      {"lat":55.793529,"lng":-4.315378,"t":"2026-07-19T10:37:33Z"},
+      {"lat":55.794031,"lng":-4.316047,"t":"2026-07-19T10:39:52Z"},
+      {"lat":55.794935,"lng":-4.315729,"t":"2026-07-19T10:42:20Z"},
+      {"lat":55.795755,"lng":-4.315301,"t":"2026-07-19T10:44:48Z"},
+      {"lat":55.796038,"lng":-4.314477,"t":"2026-07-19T10:47:19Z"},
+      {"lat":55.796515,"lng":-4.312664,"t":"2026-07-19T10:49:47Z"},
+      {"lat":55.797365,"lng":-4.311839,"t":"2026-07-19T10:52:18Z"},
+      {"lat":55.797368,"lng":-4.311663,"t":"2026-07-19T10:54:49Z"},
+      {"lat":55.797306,"lng":-4.311779,"t":"2026-07-19T10:57:17Z"},
+      {"lat":55.797400,"lng":-4.311941,"t":"2026-07-19T10:59:49Z"},
+      {"lat":55.797262,"lng":-4.311591,"t":"2026-07-19T11:02:18Z"},
+      {"lat":55.797388,"lng":-4.311914,"t":"2026-07-19T11:04:49Z"},
+      {"lat":55.797265,"lng":-4.311814,"t":"2026-07-19T11:07:21Z"},
+      {"lat":55.797398,"lng":-4.311732,"t":"2026-07-19T11:09:49Z"},
+      {"lat":55.797268,"lng":-4.311800,"t":"2026-07-19T11:12:21Z"},
+      {"lat":55.797346,"lng":-4.311848,"t":"2026-07-19T11:14:51Z"},
+      {"lat":55.797387,"lng":-4.311820,"t":"2026-07-19T11:17:18Z"},
+      {"lat":55.797315,"lng":-4.311818,"t":"2026-07-19T11:19:58Z"},
+      {"lat":55.797241,"lng":-4.311670,"t":"2026-07-19T11:22:18Z"},
+      {"lat":55.797146,"lng":-4.311822,"t":"2026-07-19T11:24:48Z"},
+      {"lat":55.797360,"lng":-4.311576,"t":"2026-07-19T11:27:20Z"},
+      {"lat":55.797329,"lng":-4.311884,"t":"2026-07-19T11:29:49Z"},
+      {"lat":55.797122,"lng":-4.311998,"t":"2026-07-19T11:32:19Z"},
+      {"lat":55.797239,"lng":-4.311966,"t":"2026-07-19T11:34:50Z"},
+      {"lat":55.797717,"lng":-4.311716,"t":"2026-07-19T11:34:58Z"},
+      {"lat":55.797197,"lng":-4.311728,"t":"2026-07-19T11:37:21Z"},
+      {"lat":55.797182,"lng":-4.311895,"t":"2026-07-19T11:39:52Z"},
+      {"lat":55.797126,"lng":-4.311653,"t":"2026-07-19T11:42:23Z"},
+      {"lat":55.797359,"lng":-4.311784,"t":"2026-07-19T11:44:50Z"},
+      {"lat":55.797298,"lng":-4.311454,"t":"2026-07-19T11:47:18Z"},
+      {"lat":55.795743,"lng":-4.311161,"t":"2026-07-19T11:49:54Z"},
+      {"lat":55.797299,"lng":-4.310175,"t":"2026-07-19T11:52:22Z"}
+    ],
+    [
+      {"lat":55.797732,"lng":-4.293663,"t":"2026-07-25T10:05:20Z"},
+      {"lat":55.797890,"lng":-4.291739,"t":"2026-07-25T10:07:39Z"},
+      {"lat":55.798197,"lng":-4.289925,"t":"2026-07-25T10:10:08Z"},
+      {"lat":55.797130,"lng":-4.288305,"t":"2026-07-25T10:12:37Z"},
+      {"lat":55.797286,"lng":-4.286455,"t":"2026-07-25T10:15:08Z"},
+      {"lat":55.798581,"lng":-4.287889,"t":"2026-07-25T10:17:38Z"},
+      {"lat":55.799928,"lng":-4.287162,"t":"2026-07-25T10:20:08Z"},
+      {"lat":55.800941,"lng":-4.288524,"t":"2026-07-25T10:22:43Z"},
+      {"lat":55.801230,"lng":-4.287306,"t":"2026-07-25T10:25:10Z"},
+      {"lat":55.800397,"lng":-4.285283,"t":"2026-07-25T10:27:42Z"},
+      {"lat":55.800341,"lng":-4.284206,"t":"2026-07-25T10:30:09Z"},
+      {"lat":55.800381,"lng":-4.284479,"t":"2026-07-25T10:30:35Z"},
+      {"lat":55.800368,"lng":-4.284344,"t":"2026-07-25T10:30:39Z"},
+      {"lat":55.800318,"lng":-4.284081,"t":"2026-07-25T10:30:43Z"},
+      {"lat":55.800184,"lng":-4.283879,"t":"2026-07-25T10:30:47Z"},
+      {"lat":55.800136,"lng":-4.283853,"t":"2026-07-25T10:30:51Z"},
+      {"lat":55.800239,"lng":-4.284064,"t":"2026-07-25T10:30:55Z"},
+      {"lat":55.800363,"lng":-4.284233,"t":"2026-07-25T10:30:59Z"},
+      {"lat":55.799963,"lng":-4.283208,"t":"2026-07-25T10:32:39Z"},
+      {"lat":55.799818,"lng":-4.281340,"t":"2026-07-25T10:35:10Z"},
+      {"lat":55.800325,"lng":-4.280973,"t":"2026-07-25T10:37:39Z"},
+      {"lat":55.801036,"lng":-4.281662,"t":"2026-07-25T10:40:09Z"},
+      {"lat":55.801423,"lng":-4.281763,"t":"2026-07-25T10:42:38Z"},
+      {"lat":55.801652,"lng":-4.283256,"t":"2026-07-25T10:45:11Z"},
+      {"lat":55.802438,"lng":-4.283154,"t":"2026-07-25T10:47:38Z"},
+      {"lat":55.802854,"lng":-4.282939,"t":"2026-07-25T10:50:08Z"},
+      {"lat":55.802724,"lng":-4.282399,"t":"2026-07-25T10:52:38Z"},
+      {"lat":55.802698,"lng":-4.282389,"t":"2026-07-25T10:55:09Z"},
+      {"lat":55.802296,"lng":-4.281491,"t":"2026-07-25T10:57:39Z"},
+      {"lat":55.802839,"lng":-4.281033,"t":"2026-07-25T11:00:18Z"},
+      {"lat":55.803772,"lng":-4.282430,"t":"2026-07-25T11:02:39Z"},
+      {"lat":55.805195,"lng":-4.282418,"t":"2026-07-25T11:05:09Z"},
+      {"lat":55.805952,"lng":-4.283480,"t":"2026-07-25T11:07:39Z"},
+      {"lat":55.806310,"lng":-4.285301,"t":"2026-07-25T11:10:09Z"},
+      {"lat":55.806414,"lng":-4.286857,"t":"2026-07-25T11:12:39Z"},
+      {"lat":55.806192,"lng":-4.289369,"t":"2026-07-25T11:15:11Z"},
+      {"lat":55.805350,"lng":-4.291459,"t":"2026-07-25T11:17:39Z"},
+      {"lat":55.806242,"lng":-4.293702,"t":"2026-07-25T11:20:12Z"},
+      {"lat":55.805061,"lng":-4.294525,"t":"2026-07-25T11:22:42Z"},
+      {"lat":55.804418,"lng":-4.294564,"t":"2026-07-25T11:25:09Z"},
+      {"lat":55.804332,"lng":-4.295310,"t":"2026-07-25T11:27:47Z"},
+      {"lat":55.804366,"lng":-4.294889,"t":"2026-07-25T11:30:09Z"},
+      {"lat":55.803588,"lng":-4.294749,"t":"2026-07-25T11:32:40Z"},
+      {"lat":55.802110,"lng":-4.295036,"t":"2026-07-25T11:35:11Z"},
+      {"lat":55.801153,"lng":-4.295253,"t":"2026-07-25T11:37:42Z"},
+      {"lat":55.799788,"lng":-4.295673,"t":"2026-07-25T11:40:14Z"},
+      {"lat":55.798476,"lng":-4.295170,"t":"2026-07-25T11:42:40Z"},
+      {"lat":55.797817,"lng":-4.293592,"t":"2026-07-25T11:45:10Z"}
+    ]
+  ];
 
   // ============================================================
   //  World building — turns OSM geometry into a tile grid
@@ -619,7 +662,201 @@
   };
 
   var world = null;
-  // exposed for the regression harness
+
+  // ============================================================
+  //  Snapping the trace to the street network
+  // ============================================================
+  // A collar reports a fix every couple of minutes, so consecutive points sit
+  // a hundred metres apart and the straight line between them cuts through
+  // gardens, houses and whole blocks. The dog did not walk through those. This
+  // routes each pair along the actual walkable network instead.
+
+  var GRAPH_SEG_M = 14;        // long ways are split so a fix can snap close
+  var ROUTE_SNAP_M = 45;       // further off the network than this, trust the GPS
+  var ROUTE_MAX_FACTOR = 3.0;  // a route this much longer than the crow flies is wrong
+  var ROUTE_MIN_M = 10;        // below this, routing is noise
+
+  // Where a dog can actually walk. Motorways and trunk roads are deliberately
+  // absent; everything else in a town has a pavement.
+  var WALKABLE = {
+    footway: 0.85, path: 0.85, pedestrian: 0.85, steps: 1.2, cycleway: 0.95,
+    living_street: 1, residential: 1, unclassified: 1, service: 1,
+    tertiary: 1.05, secondary: 1.15, primary: 1.25
+  };
+
+  function buildWalkGraph(ways) {
+    var nodes = [], adj = [], byKey = {};
+    function nodeFor(id, lat, lng) {
+      var key = id != null ? "n" + id : lat.toFixed(7) + "," + lng.toFixed(7);
+      var i = byKey[key];
+      if (i === undefined) {
+        i = nodes.length; nodes.push({ lat: lat, lng: lng }); adj.push([]); byKey[key] = i;
+      }
+      return i;
+    }
+    function link(a, b, cost) {
+      if (a === b) return;
+      var d = haversineKm(nodes[a], nodes[b]) * 1000;
+      adj[a].push([b, d * cost, d]);
+      adj[b].push([a, d * cost, d]);
+    }
+
+    (ways || []).forEach(function (w) {
+      var t = w.tags || {};
+      var cost = WALKABLE[t.highway];
+      if (!cost) return;
+      var g = w.geometry;
+      if (!g || g.length < 2) return;
+      var ids = w.nodes || [];
+      var prev = nodeFor(ids[0], g[0].lat, g[0].lon);
+      for (var i = 1; i < g.length; i++) {
+        var cur = nodeFor(ids[i], g[i].lat, g[i].lon);
+        // Split long straights. Junctions share OSM node ids so the graph joins
+        // up on its own, but a 200m run of road with no intermediate node would
+        // leave a fix snapping 100m from where it actually is.
+        var span = haversineKm(nodes[prev], nodes[cur]) * 1000;
+        if (span > GRAPH_SEG_M * 1.5) {
+          var steps = Math.ceil(span / GRAPH_SEG_M), last = prev;
+          for (var s = 1; s < steps; s++) {
+            var f = s / steps;
+            var mid = nodeFor(null, g[i - 1].lat + (g[i].lat - g[i - 1].lat) * f,
+                                    g[i - 1].lon + (g[i].lon - g[i - 1].lon) * f);
+            link(last, mid, cost); last = mid;
+          }
+          link(last, cur, cost);
+        } else {
+          link(prev, cur, cost);
+        }
+        prev = cur;
+      }
+    });
+
+    // coarse lat/lng buckets, so finding the nearest node is not a full scan
+    var BUCK = 0.0005;
+    var grid = {};
+    nodes.forEach(function (n, i) {
+      var k = Math.floor(n.lat / BUCK) + "," + Math.floor(n.lng / BUCK);
+      (grid[k] || (grid[k] = [])).push(i);
+    });
+
+    function nearest(lat, lng) {
+      var gx = Math.floor(lat / BUCK), gy = Math.floor(lng / BUCK);
+      var best = -1, bestD = Infinity;
+      for (var r = 1; r <= 3 && best < 0; r++) {
+        for (var ox = -r; ox <= r; ox++) {
+          for (var oy = -r; oy <= r; oy++) {
+            var list = grid[(gx + ox) + "," + (gy + oy)];
+            if (!list) continue;
+            for (var i = 0; i < list.length; i++) {
+              var d = haversineKm(nodes[list[i]], { lat: lat, lng: lng }) * 1000;
+              if (d < bestD) { bestD = d; best = list[i]; }
+            }
+          }
+        }
+      }
+      return { node: best, dist: bestD };
+    }
+
+    // Dijkstra with a binary heap, abandoned once the cheapest frontier is
+    // further out than any sane route between two consecutive fixes.
+    function route(from, to, limit) {
+      if (from === to) return [from];
+      var dist = new Float64Array(nodes.length).fill(Infinity);
+      var prevN = new Int32Array(nodes.length).fill(-1);
+      var heap = [[0, from]];
+      dist[from] = 0;
+      function push(item) {
+        heap.push(item);
+        var i = heap.length - 1;
+        while (i > 0) {
+          var p = (i - 1) >> 1;
+          if (heap[p][0] <= heap[i][0]) break;
+          var tmp = heap[p]; heap[p] = heap[i]; heap[i] = tmp; i = p;
+        }
+      }
+      function pop() {
+        var top = heap[0], last = heap.pop();
+        if (heap.length) {
+          heap[0] = last;
+          var i = 0;
+          for (;;) {
+            var l = i * 2 + 1, r = l + 1, m = i;
+            if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+            if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+            if (m === i) break;
+            var tmp = heap[m]; heap[m] = heap[i]; heap[i] = tmp; i = m;
+          }
+        }
+        return top;
+      }
+      while (heap.length) {
+        var cur = pop(), d = cur[0], n = cur[1];
+        if (d > dist[n]) continue;
+        if (n === to) break;
+        if (d > limit) return null;
+        var edges = adj[n];
+        for (var e = 0; e < edges.length; e++) {
+          var nd = d + edges[e][1];
+          if (nd < dist[edges[e][0]]) { dist[edges[e][0]] = nd; prevN[edges[e][0]] = n; push([nd, edges[e][0]]); }
+        }
+      }
+      if (dist[to] === Infinity || dist[to] > limit) return null;
+      var path = [], at = to;
+      while (at !== -1) { path.push(at); at = prevN[at]; }
+      return path.reverse();
+    }
+
+    return { nodes: nodes, nearest: nearest, route: route, size: nodes.length };
+  }
+
+  // Turn a sparse walk into a dense one that follows the streets, keeping each
+  // original fix's timing: time is spread along the routed length, so the dog
+  // takes as long to get round the corner as the data says it did.
+  function routeWalk(walk, graph) {
+    if (!graph || graph.size < 8 || walk.length < 2) return walk;
+
+    var snap = walk.map(function (p) {
+      var s = graph.nearest(p.lat, p.lng);
+      return (s.node >= 0 && s.dist <= ROUTE_SNAP_M) ? s.node : -1;
+    });
+
+    var out = [];
+    for (var i = 0; i < walk.length - 1; i++) {
+      var a = walk[i], b = walk[i + 1];
+      var straight = haversineKm(a, b) * 1000;
+      var mid = null;
+      if (straight > ROUTE_MIN_M && snap[i] >= 0 && snap[i + 1] >= 0) {
+        var path = graph.route(snap[i], snap[i + 1],
+                               Math.max(180, straight * ROUTE_MAX_FACTOR));
+        if (path && path.length > 1) {
+          mid = path.map(function (n) {
+            return { lat: graph.nodes[n].lat, lng: graph.nodes[n].lng };
+          });
+        }
+      }
+
+      var sub = [a].concat(mid || [], [b]);
+      // drop points that repeat, so the length maths stays sane
+      var clean = [sub[0]];
+      for (var s2 = 1; s2 < sub.length; s2++) {
+        if (haversineKm(clean[clean.length - 1], sub[s2]) * 1000 > 0.5) clean.push(sub[s2]);
+      }
+
+      var cum = [0], total = 0;
+      for (var c = 1; c < clean.length; c++) {
+        total += haversineKm(clean[c - 1], clean[c]) * 1000;
+        cum.push(total);
+      }
+      var ta = new Date(a.t).getTime(), tb = new Date(b.t).getTime();
+      for (var k = 0; k < clean.length - 1; k++) {
+        var f2 = total > 0 ? cum[k] / total : 0;
+        out.push({ lat: clean[k].lat, lng: clean[k].lng,
+                   t: new Date(ta + (tb - ta) * f2).toISOString() });
+      }
+    }
+    out.push(walk[walk.length - 1]);
+    return out;
+  }
 
   // Value noise on a coarse lattice, bilinearly sampled. Per-tile random
   // would just be speckle; real ground varies over metres, not centimetres.
@@ -1567,8 +1804,11 @@
       var mins = Math.round((new Date(walk[walk.length - 1].t) - new Date(walk[0].t)) / 60000);
       var row = document.createElement("div");
       row.className = "walk" + (pb.index === i ? " active" : "");
+      // Once a walk has been routed onto the streets we know its real length;
+      // straight lines between fixes always cut the corners.
+      var shown = (pb.index === i && pb.walk) ? pb.walk : walk;
       row.innerHTML = '<div><div class="d">' + fmtDate(walk[0].t) + '</div>' +
-        '<div class="m">' + walkKm(walk).toFixed(1) + ' km · ' + mins + ' min</div></div>' +
+        '<div class="m">' + walkKm(shown).toFixed(1) + ' km · ' + mins + ' min</div></div>' +
         '<div style="font-size:15px">▶</div>';
       row.addEventListener("click", function () { startWalk(i); });
       el.appendChild(row);
@@ -1578,6 +1818,7 @@
   // Map data per walk, keyed on its bounding box, so stepping back to a walk
   // you have already watched does not go back to Overpass for it.
   var osmCache = {};
+  var walkGraph = null, walkGraphKey = null;
   function boundsKey(b) {
     return [b.minLat, b.minLng, b.maxLat, b.maxLng]
       .map(function (v) { return v.toFixed(5); }).join(",");
@@ -1598,18 +1839,52 @@
       if (!sameBounds(b, state.bounds)) return;   // user moved on while it loaded
       state.osmWays = ways;
       if (scene) scene.buildLevel();
+      refreshRoute();
     });
+  }
+
+  // The routed version of each walk, once the map for its area has arrived.
+  var routeCache = {};
+
+  function routedWalk(i) {
+    var walk = state.walks[i];
+    if (!walk) return walk;
+    var key = i + "@" + (state.osmWays ? boundsKey(state.bounds) : "raw");
+    if (routeCache[key]) return routeCache[key];
+    if (!state.osmWays) return walk;
+    if (!walkGraph || walkGraphKey !== boundsKey(state.bounds)) {
+      walkGraph = buildWalkGraph(state.osmWays);
+      walkGraphKey = boundsKey(state.bounds);
+    }
+    var routed = routeWalk(walk, walkGraph);
+    routeCache[key] = routed;
+    return routed;
+  }
+
+  // Re-route the walk in progress once its map data lands, so the dog stops
+  // cutting through the buildings mid-playback.
+  function refreshRoute() {
+    if (pb.index < 0) return;
+    var routed = routedWalk(pb.index);
+    if (routed === pb.walk) return;
+    pb.walk = routed;
+    renderWalkList();
+    if (scene) scene.applyProgress(Math.min(pb.elapsed / pb.duration, 1));
   }
 
   function startWalk(i) {
     var walk = state.walks[i];
     if (!walk || walk.length < 2) return;
     focusWorldOn(walk);
-    pb.walk = walk; pb.index = i; pb.playing = true; pb.elapsed = 0;
-    // Deliberately slow: a 20-minute walk plays over roughly four minutes,
-    // about a fifth of real time, so the dog ambles rather than darts. The
-    // speed buttons multiply up from here, and 0.5x halves it again.
-    pb.duration = Math.min(600000, Math.max(120000, walk.length * 2500));
+    pb.index = i;
+    pb.walk = routedWalk(i);
+    pb.playing = true; pb.elapsed = 0;
+    // Paced off the walk's own clock, not its point count. A tracker reports
+    // every couple of minutes, so a 37-minute walk is barely a dozen fixes —
+    // scaling by point count played it in two minutes flat. A sixth of real
+    // time means the dog ambles; the speed buttons multiply up from here.
+    var realMs = new Date(walk[walk.length - 1].t) - new Date(walk[0].t);
+    pb.duration = Math.min(720000, Math.max(150000, realMs / 6));
     document.getElementById("transport").classList.remove("off");
     setPlayLabel();
     renderWalkList();
@@ -1671,6 +1946,8 @@
       stopWalk();
       buildFromPoints(data);
       state.osmWays = null;
+      routeCache = {};
+      walkGraph = null; walkGraphKey = null;
       setDataMsg("Loaded " + data.length + " points across " + state.walks.length + " walk(s).", true);
       rebuildFromData();
       document.getElementById("data-panel").classList.remove("open");
@@ -1690,6 +1967,7 @@
       if (!sameBounds(b, state.bounds)) return;
       state.osmWays = ways;
       if (scene) scene.buildLevel();
+      refreshRoute();
     });
   }
 
@@ -1723,7 +2001,7 @@
   });
   document.getElementById("btn-demo").addEventListener("click", function () {
     document.getElementById("data-panel").classList.remove("open");
-    startDemo(true);
+    loadSampleWalks(true);
   });
   document.getElementById("btn-play").addEventListener("click", function () {
     if (!pb.walk) return;
@@ -1751,22 +2029,15 @@
   //  Start
   // ============================================================
 
-  function startDemo(force) {
-    buildFromPoints(fallbackWalks());
-    if (scene) scene.buildLevel();
-
-    overpass(walkableQuery(MOCK_CENTER)).then(function (ways) {
-      if (ways && ways.length > 4) {
-        var pts = demoWalksFromGraph(buildGraph(ways));
-        if (pts) { buildFromPoints(pts); }
-      }
-      return overpass(areaQuery(state.bounds));
-    }).then(function (ways) {
-      if (ways && ways.length) state.osmWays = ways;
-      if (scene) scene.buildLevel();
-      if (!ways || !ways.length) toast("Map data unavailable — showing plain ground");
-      if (force) toast("Demo walks restored");
-    });
+  function loadSampleWalks(force) {
+    stopWalk();
+    var flat = [];
+    SAMPLE_WALKS.forEach(function (w) { flat = flat.concat(w); });
+    buildFromPoints(flat, SAMPLE_WALKS);
+    routeCache = {};
+    walkGraph = null; walkGraphKey = null;
+    rebuildFromData();
+    if (force) toast("Sample walks restored");
   }
 
   game = new Phaser.Game({
@@ -1784,7 +2055,7 @@
     document.getElementById("walks").classList.add("hidden");
   }
 
-  startDemo(false);
+  loadSampleWalks(false);
 })();
 </script>
 </body>

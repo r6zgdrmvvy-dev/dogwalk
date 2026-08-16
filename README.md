@@ -7,9 +7,10 @@ a scattered treasure along the way.
 
 ## Play it
 
-Open `dog-walk-game.html` in a browser. No build step, no server — it's a
-single self-contained file. It loads with seven generated demo walks so it's
-playable immediately.
+Open `game.html` in a browser. No build step, no server. It ships with two of
+Guinness's real walks around Giffnock — a wander through Rouken Glen and a
+morning round the streets — so there is something true to watch on first load.
+"Load data" replaces them with your own dog's.
 
 Set your dog's name at the top, then load real data either by pasting JSON
 into the "Load walk data" panel or by loading an exported `.json` file
@@ -44,6 +45,31 @@ On a month of real data that turns 2,074 raw fixes into 62 walks averaging
 2 km and 43 minutes. Summing every raw fix instead gives 237 km, most of it
 GPS jitter and car journeys.
 
+### Following the streets
+
+A collar reports every couple of minutes, so consecutive fixes sit a hundred
+metres apart and the straight line between them cuts through gardens, houses
+and whole blocks. The dog did not walk through those.
+
+So the walkable ways — footpaths, residential streets, everything short of a
+motorway — are built into a graph, long runs split every ~14m so a fix can snap
+close to the line, and each consecutive pair of fixes is routed along it with
+Dijkstra. Footpaths are weighted cheaper than an A-road, so a route through a
+park beats the same distance along a main road. A fix more than 45m from any
+way is left where the GPS put it (the dog is genuinely off-network), and a
+route more than three times the straight-line distance is rejected as wrong.
+Each original fix keeps its timestamp; the time between two fixes is spread
+along the routed length.
+
+Routing makes walks measurably longer — the bundled Jul 25 walk goes from
+4.4 km to 5.4 km — because straight lines between sparse fixes always cut the
+corners. The walk list shows the routed figure once the map for that area has
+loaded.
+
+Playback is paced off the walk's own clock, at a sixth of real time, capped at
+twelve minutes. Pacing it by point count (as an earlier version did) played a
+37-minute walk in two, because a real walk is barely a dozen fixes.
+
 ## Pulling real data from Tractive
 
 Tractive (the GPS tracker) has no official public API, so this uses the
@@ -70,8 +96,11 @@ what the API actually returned.
 
 ## Status / open items
 
-- No backend, no persistence — reloading the page resets to demo data unless
-  you reload your exported file.
+- No backend, no persistence — reloading the page resets to the bundled sample
+  walks unless you reload your exported file.
+- The bundled samples are real GPS trails. A walk trail is home-address
+  adjacent data; swap them out before publishing your own copy if that matters
+  to you.
 - The Tractive export script's response parsing is best-effort. It works on a
   real account, but the endpoint is undocumented and could change shape.
 - The world is built around one walk at a time. A single day trip whose route
