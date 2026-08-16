@@ -59,3 +59,12 @@ actually returned.
   local per-person export script) is a bigger step — it needs a backend,
   since Tractive only supports raw email/password auth (no OAuth), which
   changes how account credentials would need to be handled.
+
+## Art credit
+
+Map tiles are Kenney's [Tiny Town](https://kenney.nl/assets/tiny-town) pack,
+released under Creative Commons Zero (CC0) — free for personal, educational
+and commercial use, with credit appreciated but not required. The full
+licence text is in `ASSETS-LICENSE.txt`. The 132-tile sheet is embedded in
+`dog-walk-game.html` as a data URI so the page stays a single self-contained
+file.

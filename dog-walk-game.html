@@ -1332,60 +1332,51 @@
     centreOnLatLng(state.points[0].lat, state.points[0].lng);
   }
 
-  // ---------- human-scale scene renderer ----------
+  // ---------- tileset ----------
   //
-  // This draws a place you could stand in, not a map of a territory: the
-  // frame covers tens of metres, so houses, hedges and pavements appear at
-  // something like their real size relative to a dog.
-  //
-  // The whole walk can't be pre-rendered at this scale — 1.5km at 6px per
-  // metre would be a canvas of roughly 12000x6700, hundreds of megabytes —
-  // so the canvas is only viewport-sized and a camera redraws whatever is
-  // currently in view. Streets are rasterised from the real OpenStreetMap
-  // way geometry rather than from grid cells, which is what lets them run
-  // at real angles instead of along a grid.
+  // Art is Kenney's "Tiny Town" (CC0) rather than shapes drawn in code:
+  // the remaining gap to a real farm-sim look was never architecture, it
+  // was the volume of hand-authored pixel art. 132 tiles of 16x16, embedded
+  // as a data URI so the page stays a single self-contained file and the
+  // canvas never gets tainted. Licence text is in ASSETS-LICENSE.txt.
 
-  var PX_PER_M = 6;          // logical pixels per metre
-  var ROAD_HALF_M = 2.6;     // carriageway half-width
-  var PAVE_HALF_M = 4.4;     // kerb-to-kerb half-width including pavements
-  var EXPLORE_RADIUS_M = 45; // how far from the walked line counts as seen
+  var TS = 16;               // tile size in the sheet
+  var TS_COLS = 12;
+  var M_PER_TILE = 2;        // a tile is two metres of ground
+  var PX_PER_M = TS / M_PER_TILE;
 
-  var PAL = {
-    grass: "#4f8f38", grassDark: "#3d7429", grassLite: "#6fae44",
-    grassBright: "#8ac94e", grassDeep: "#2a5c1c",
-    parkGrass: "#5a9c3e", woodFloor: "#356b26",
-    water: "#3f7fa8", waterLite: "#68a8cc", waterDark: "#2d5f80",
-    tarmac: "#5f6165", tarmacLite: "#74767a", tarmacDark: "#4a4c50",
-    kerb: "#a8a49c", kerbShade: "#87837b", line: "#e0dccb",
-    outline: "#23252a",
-    slate: "#4a5058", slateLite: "#666d77", slateDark: "#363b42",
-    stoneBlonde: "#d9b477", stoneBlondeShade: "#b8935c",
-    stoneRed: "#a8563c", stoneRedShade: "#88422d",
-    window: "#b8d8e8", windowDark: "#7fa8bf", frame: "#efece2",
-    doorGreen: "#2f4a35", doorNavy: "#2a3a5a", doorRed: "#7a2a2a",
-    hedge: "#2f6b2c", hedgeLite: "#4a8a3c", hedgeDark: "#1e4a1c",
-    railing: "#23252a", lamp: "#3a3d42", lampLit: "#f0e0a8",
-    pebble: "#c4beb2", pebbleDark: "#948f84",
-    flowerA: "#f2e9a0", flowerB: "#e08fb8", flowerC: "#ffffff",
-    trailNear: "#e8a33d", trailFar: "rgba(60,45,25,0.22)",
+  var T = {
+    grass: [0, 1, 2],
+    dirt: [39, 40, 41, 42],
+    gravel: 43,
+    treeGreen: [4, 16, 28],
+    treeAutumn: [3, 15, 27],
+    bush: 5,
+    plants: 17,
+    fenceH: [80, 81, 82],
+    fenceV: [47, 59, 71],
+    // 3x3 house blocks: roof row, roof-with-gable row, wall row
+    houses: [
+      { roof: [48, 49, 50], mid: [60, 63, 62], wall: [84, 85, 86] },
+      { roof: [52, 53, 54], mid: [64, 67, 66], wall: [84, 85, 86] },
+      { roof: [48, 49, 50], mid: [60, 63, 62], wall: [88, 89, 90] },
+      { roof: [52, 53, 54], mid: [64, 67, 66], wall: [88, 89, 90] }
+    ]
   };
 
+  var sheetImg = new Image();
+  var sheetReady = false;
+  sheetImg.onload = function () { sheetReady = true; renderScene(); };
+  sheetImg.src = "data:image/png;base64,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";
+
+  function drawTile(ctx, idx, x, y) {
+    var sx = (idx % TS_COLS) * TS, sy = Math.floor(idx / TS_COLS) * TS;
+    ctx.drawImage(sheetImg, sx, sy, TS, TS, Math.round(x), Math.round(y), TS, TS);
+  }
+
+  function pick(arr, seed) { return arr[Math.floor(seededRandom(seed) * arr.length) % arr.length]; }
+
   var cam = { x: 0, y: 0 };  // camera centre, in metres from scene origin
-  var sceneReady = false;
-
-  function px(ctx, color, x, y, w, h) {
-    ctx.fillStyle = color;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-  }
-
-  function pxCircle(ctx, color, cx, cy, r) {
-    ctx.fillStyle = color;
-    cx = Math.round(cx); cy = Math.round(cy); r = Math.round(r);
-    for (var dy = -r; dy <= r; dy++) {
-      var half = Math.floor(Math.sqrt(r * r - dy * dy));
-      ctx.fillRect(cx - half, cy + dy, half * 2 + 1, 1);
-    }
-  }
 
   // metres east/south of the bounding box's north-west corner
   function toScene(lat, lng) {
@@ -1396,152 +1387,20 @@
     };
   }
 
-  function sceneWidthM() { return 0; }
-
-  // Hard-edged filled convex quad, by scanline. Rotating fillRect would
-  // antialias the edges that the pixel look depends on.
-  function fillQuad(ctx, color, pts) {
-    var minY = Math.floor(Math.min(pts[0][1], pts[1][1], pts[2][1], pts[3][1]));
-    var maxY = Math.ceil(Math.max(pts[0][1], pts[1][1], pts[2][1], pts[3][1]));
-    ctx.fillStyle = color;
-    for (var y = minY; y <= maxY; y++) {
-      var xs = [];
-      for (var i = 0; i < 4; i++) {
-        var a = pts[i], b = pts[(i + 1) % 4];
-        if ((a[1] <= y && b[1] > y) || (b[1] <= y && a[1] > y)) {
-          xs.push(a[0] + (y - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
-        }
-      }
-      if (xs.length < 2) continue;
-      var x0 = Math.floor(Math.min.apply(null, xs));
-      var x1 = Math.ceil(Math.max.apply(null, xs));
-      ctx.fillRect(x0, y, x1 - x0, 1);
-    }
-  }
-
-  // Draws every road segment in view as a thick band, with round joints so
-  // corners don't show notches.
-  function strokeWays(ctx, ways, halfM, colour, toPx) {
-    var half = halfM * PX_PER_M;
-    ways.forEach(function (way) {
-      var g = way.geometry;
-      for (var i = 0; i < g.length - 1; i++) {
-        var p0 = toPx(g[i].lat, g[i].lon), p1 = toPx(g[i + 1].lat, g[i + 1].lon);
-        var dx = p1.x - p0.x, dy = p1.y - p0.y;
-        var len = Math.sqrt(dx * dx + dy * dy);
-        if (len < 0.01) continue;
-        var nx = -dy / len * half, ny = dx / len * half;
-        fillQuad(ctx, colour, [
-          [p0.x + nx, p0.y + ny], [p1.x + nx, p1.y + ny],
-          [p1.x - nx, p1.y - ny], [p0.x - nx, p0.y - ny]
-        ]);
-        pxCircle(ctx, colour, p1.x, p1.y, half);
-      }
-      if (g.length) {
-        var s = toPx(g[0].lat, g[0].lon);
-        pxCircle(ctx, colour, s.x, s.y, half);
-      }
-    });
-  }
-
-  function drawTreeS(ctx, x, y, scale) {
-    var r = Math.round(14 * scale);
-    var tw = Math.max(3, Math.round(6 * scale)), th = Math.max(5, Math.round(12 * scale));
-    px(ctx, PAL.outline, x - tw / 2 - 1, y - 2, tw + 2, th + 1);
-    px(ctx, "#6b4523", x - tw / 2, y - 2, tw, th);
-    px(ctx, "#8a5c30", x - tw / 2, y - 2, 2, th);
-    var cy = y - r;
-    pxCircle(ctx, PAL.outline, x, cy, r + 1);
-    pxCircle(ctx, "#1e5c1c", x, cy, r);
-    pxCircle(ctx, "#2a7d26", x - 1, cy - 1, Math.round(r * 0.82));
-    pxCircle(ctx, "#3f9c33", x - r * 0.3, cy - r * 0.35, Math.round(r * 0.5));
-    pxCircle(ctx, "#5cbd45", x - r * 0.42, cy - r * 0.48, Math.round(r * 0.25));
-  }
-
-  function drawBushS(ctx, x, y, w) {
-    var r = Math.round(w / 2);
-    pxCircle(ctx, PAL.hedgeDark, x, y - r, r);
-    pxCircle(ctx, PAL.hedge, x, y - r - 1, r - 1);
-    pxCircle(ctx, PAL.hedgeLite, x - r * 0.35, y - r - r * 0.4, Math.round(r * 0.4));
-  }
-
-  function drawHedgeS(ctx, x, y, w) {
-    px(ctx, PAL.hedgeDark, x, y - 12, w, 13);
-    px(ctx, PAL.hedge, x, y - 12, w, 10);
-    for (var i = 0; i < w; i += 5) {
-      px(ctx, PAL.hedgeLite, x + i, y - 11, 3, 3);
-      px(ctx, PAL.hedgeDark, x + i + 2, y - 6, 2, 2);
-    }
-  }
-
-  function drawLampS(ctx, x, y) {
-    px(ctx, PAL.lamp, x, y - 30, 3, 30);
-    px(ctx, PAL.outline, x - 1, y - 2, 5, 3);
-    px(ctx, PAL.lamp, x - 4, y - 36, 11, 5);
-    px(ctx, PAL.lampLit, x - 3, y - 32, 9, 3);
-  }
-
-  // Sandstone semi at roughly its real size: ~9m frontage.
-  function drawHouseS(ctx, x, y, variant) {
-    var W = Math.round(9 * PX_PER_M), ROOF_H = Math.round(4.5 * PX_PER_M), WALL_H = Math.round(5 * PX_PER_M);
-    var left = Math.round(x - W / 2), top = Math.round(y - WALL_H - ROOF_H);
-    var stone = variant % 2 ? PAL.stoneRed : PAL.stoneBlonde;
-    var stoneShade = variant % 2 ? PAL.stoneRedShade : PAL.stoneBlondeShade;
-    var doorCol = [PAL.doorGreen, PAL.doorNavy, PAL.doorRed][variant % 3];
-
-    px(ctx, PAL.outline, left + W - 22, top - 13, 15, 16);
-    px(ctx, stoneShade, left + W - 21, top - 12, 13, 15);
-    px(ctx, PAL.outline, left + W - 19, top - 18, 5, 6);
-    px(ctx, PAL.outline, left + W - 13, top - 18, 5, 6);
-
-    for (var i = 0; i < ROOF_H; i++) {
-      var half = Math.round(6 + (i / (ROOF_H - 1)) * (W / 2 - 4));
-      var rx = left + Math.round(W / 2) - half, rw = half * 2;
-      px(ctx, PAL.outline, rx - 1, top + i, rw + 2, 1);
-      px(ctx, i < 2 ? PAL.slateLite : PAL.slate, rx, top + i, rw, 1);
-      if (i % 6 === 5) px(ctx, PAL.slateDark, rx, top + i, rw, 1);
-      if (i > 3) px(ctx, PAL.slateDark, rx + rw - 5, top + i, 5, 1);
-    }
-
-    var wy = top + ROOF_H;
-    px(ctx, PAL.outline, left + 2, wy, W - 4, WALL_H);
-    px(ctx, stone, left + 3, wy + 1, W - 7, WALL_H - 2);
-    px(ctx, stoneShade, left + W - 9, wy + 1, 5, WALL_H - 2);
-    for (var cy2 = wy + 6; cy2 < wy + WALL_H - 2; cy2 += 7) {
-      px(ctx, stoneShade, left + 3, cy2, W - 7, 1);
-    }
-
-    [left + 7, left + W - 25].forEach(function (wx) {
-      px(ctx, PAL.outline, wx, wy + 5, 18, 15);
-      px(ctx, PAL.frame, wx + 1, wy + 6, 16, 13);
-      px(ctx, PAL.window, wx + 2, wy + 7, 14, 11);
-      px(ctx, PAL.windowDark, wx + 9, wy + 7, 7, 5);
-      px(ctx, PAL.frame, wx + 8, wy + 6, 2, 13);
-      px(ctx, PAL.frame, wx + 1, wy + 12, 16, 2);
-    });
-
-    var dx = left + Math.round(W / 2) - 7;
-    px(ctx, PAL.outline, dx, wy + WALL_H - 21, 15, 21);
-    px(ctx, doorCol, dx + 1, wy + WALL_H - 20, 13, 20);
-    px(ctx, PAL.frame, dx + 1, wy + WALL_H - 20, 13, 3);
-    px(ctx, PAL.lampLit, dx + 11, wy + WALL_H - 11, 2, 2);
-  }
-
-  function groundColourAt(lat, lng) {
-    if (!state.grid) return PAL.grass;
-    var cell = pointToCell({ lat: lat, lng: lng }, state.bounds);
-    var t = state.grid[cell.row][cell.col].terrain;
-    if (t === "park") return PAL.parkGrass;
-    if (t === "forest") return PAL.woodFloor;
-    if (t === "water") return PAL.water;
-    return PAL.grass;
+  function segDist(px_, py, ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay;
+    var L = dx * dx + dy * dy;
+    var t = L > 0 ? ((px_ - ax) * dx + (py - ay) * dy) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    var cx = ax + t * dx, cy = ay + t * dy;
+    return Math.hypot(px_ - cx, py - cy);
   }
 
   function renderScene() {
     var canvas = document.getElementById("map-canvas");
     var overlay = document.getElementById("map-overlay");
     var frame = document.querySelector(".grid-wrap");
-    if (!canvas || !frame || !state.bounds) return;
+    if (!canvas || !frame || !state.bounds || !state.points.length) return;
 
     var zoom = ZOOM_LEVELS[zoomIndex];
     var W = Math.max(80, Math.ceil(frame.clientWidth / zoom));
@@ -1550,8 +1409,11 @@
 
     var ctx = canvas.getContext("2d");
     ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#4f8f38";
+    ctx.fillRect(0, 0, W, H);
+    if (!sheetReady) return;
 
-    // world->canvas, with the camera centred
+    // world (metres) -> canvas pixels
     var originX = cam.x * PX_PER_M - W / 2;
     var originY = cam.y * PX_PER_M - H / 2;
     function toPx(lat, lng) {
@@ -1560,118 +1422,103 @@
     }
     function mToPx(mx, my) { return { x: mx * PX_PER_M - originX, y: my * PX_PER_M - originY }; }
 
-    var viewW_m = W / PX_PER_M, viewH_m = H / PX_PER_M;
-    var minX_m = cam.x - viewW_m / 2, maxX_m = cam.x + viewW_m / 2;
-    var minY_m = cam.y - viewH_m / 2, maxY_m = cam.y + viewH_m / 2;
+    // visible range in world tile coordinates
+    var t0x = Math.floor(originX / TS) - 1, t1x = Math.ceil((originX + W) / TS) + 1;
+    var t0y = Math.floor(originY / TS) - 1, t1y = Math.ceil((originY + H) / TS) + 1;
 
-    // ---- ground ----
-    // sampled per 2px block from the coarse terrain classification
-    var STEP = 4;
-    for (var yy = 0; yy < H; yy += STEP) {
-      for (var xx = 0; xx < W; xx += STEP) {
-        var mx = (xx + originX) / PX_PER_M, my = (yy + originY) / PX_PER_M;
-        var b = state.bounds;
-        var lat = b.maxLat - my / 111320;
-        var lng = b.minLng + mx / (111320 * Math.cos(b.minLat * Math.PI / 180));
-        px(ctx, groundColourAt(lat, lng), xx, yy, STEP, STEP);
-      }
-    }
-    // grass texture
-    for (var i = 0; i < (W * H) / 90; i++) {
-      var gx2 = Math.floor(seededRandom(i * 3.7 + Math.floor(cam.x)) * W);
-      var gy2 = Math.floor(seededRandom(i * 5.9 + Math.floor(cam.y)) * H);
-      var pick = seededRandom(i * 7.3);
-      px(ctx, pick > 0.7 ? PAL.grassBright : (pick > 0.4 ? PAL.grassLite : PAL.grassDeep), gx2, gy2, 2, 1);
-    }
-
-    // ---- streets from real OSM geometry ----
-    var ways = state.osmWays || [];
-    var roadWays = ways.filter(function (w) {
-      return w.tags && w.tags.highway && w.geometry && w.geometry.length > 1;
-    });
-    // cull to what's near the view
-    var visible = roadWays.filter(function (w) {
-      for (var i = 0; i < w.geometry.length; i++) {
-        var s = toScene(w.geometry[i].lat, w.geometry[i].lon);
-        if (s.x > minX_m - 30 && s.x < maxX_m + 30 && s.y > minY_m - 30 && s.y < maxY_m + 30) return true;
-      }
-      return false;
-    });
-
-    strokeWays(ctx, visible, PAVE_HALF_M, PAL.kerb, toPx);
-    strokeWays(ctx, visible, PAVE_HALF_M - 0.5, PAL.kerbShade, toPx);
-    strokeWays(ctx, visible, PAVE_HALF_M - 0.7, PAL.kerb, toPx);
-    strokeWays(ctx, visible, ROAD_HALF_M, PAL.tarmac, toPx);
-
-    // ---- props placed along the streets ----
-    // Houses are set back from the kerb on both sides at a terrace-like
-    // spacing, always drawn face-on to the camera.
-    var props = [];
-    visible.forEach(function (way, wi) {
+    // road segments near the view, in metres
+    var segs = [];
+    (state.osmWays || []).forEach(function (way) {
+      if (!way.tags || !way.tags.highway || !way.geometry) return;
       var hw = way.tags.highway;
-      var residential = hw === "residential" || hw === "living_street" || hw === "unclassified" ||
-        hw === "tertiary" || hw === "secondary";
-      var g = way.geometry;
-      var carried = 0;
-      for (var i = 0; i < g.length - 1; i++) {
-        var a = toScene(g[i].lat, g[i].lon), b2 = toScene(g[i + 1].lat, g[i + 1].lon);
-        var dx = b2.x - a.x, dy = b2.y - a.y;
-        var segLen = Math.sqrt(dx * dx + dy * dy);
-        if (segLen < 0.01) continue;
-        var ux = dx / segLen, uy = dy / segLen;
-        var nx = -uy, ny = ux;
-        var spacing = residential ? 11 : 26;
-        for (var d = carried; d < segLen; d += spacing) {
-          var bx = a.x + ux * d, by = a.y + uy * d;
-          var seed = (wi + 1) * 131 + Math.round(d * 7) + i * 17;
-          [-1, 1].forEach(function (side) {
-            var offset = PAVE_HALF_M + 5.5;
-            var wx = bx + nx * offset * side, wy2 = by + ny * offset * side;
-            if (wx < minX_m - 12 || wx > maxX_m + 12 || wy2 < minY_m - 12 || wy2 > maxY_m + 14) return;
-            var roll = seededRandom(seed * (side > 0 ? 1.7 : 2.9));
-            if (residential && roll > 0.22) {
-              props.push({ kind: "house", x: wx, y: wy2, v: Math.floor(roll * 6), sortY: wy2 });
-              props.push({ kind: "hedge", x: bx + nx * (PAVE_HALF_M + 1.2) * side, y: by + ny * (PAVE_HALF_M + 1.2) * side, sortY: wy2 - 0.01 });
-            } else if (roll > 0.55) {
-              props.push({ kind: "tree", x: wx, y: wy2, s: 0.8 + roll * 0.5, sortY: wy2 });
-            } else if (roll > 0.42) {
-              props.push({ kind: "bush", x: wx, y: wy2, sortY: wy2 });
-            }
-          });
-          // street lamps on the pavement
-          if (seededRandom(seed * 3.3) > 0.72) {
-            var lside = seededRandom(seed * 4.1) > 0.5 ? 1 : -1;
-            props.push({
-              kind: "lamp",
-              x: bx + nx * (PAVE_HALF_M - 1.1) * lside,
-              y: by + ny * (PAVE_HALF_M - 1.1) * lside,
-              sortY: by + ny * (PAVE_HALF_M - 1.1) * lside
-            });
-          }
-        }
-        carried = Math.max(0, spacing - ((segLen - carried) % spacing));
+      var residential = hw === "residential" || hw === "living_street" ||
+        hw === "unclassified" || hw === "tertiary" || hw === "secondary";
+      for (var i = 0; i < way.geometry.length - 1; i++) {
+        var a = toScene(way.geometry[i].lat, way.geometry[i].lon);
+        var b2 = toScene(way.geometry[i + 1].lat, way.geometry[i + 1].lon);
+        var pad = 40;
+        if (Math.min(a.x, b2.x) > (originX + W) / PX_PER_M + pad) continue;
+        if (Math.max(a.x, b2.x) < originX / PX_PER_M - pad) continue;
+        if (Math.min(a.y, b2.y) > (originY + H) / PX_PER_M + pad) continue;
+        if (Math.max(a.y, b2.y) < originY / PX_PER_M - pad) continue;
+        segs.push({ ax: a.x, ay: a.y, bx: b2.x, by: b2.y, residential: residential });
       }
     });
 
-    // 3/4 camera: things lower on screen are nearer, so they draw last
+    // ---- ground: grass, with the roads worn to dirt track ----
+    for (var ty = t0y; ty <= t1y; ty++) {
+      for (var tx = t0x; tx <= t1x; tx++) {
+        var mx = (tx + 0.5) * TS / PX_PER_M, my = (ty + 0.5) * TS / PX_PER_M;
+        var best = 1e9;
+        for (var si = 0; si < segs.length; si++) {
+          var d = segDist(mx, my, segs[si].ax, segs[si].ay, segs[si].bx, segs[si].by);
+          if (d < best) best = d;
+        }
+        var seed = Math.abs((tx * 73856093) ^ (ty * 19349663));
+        var idx;
+        if (best < 2.6) {
+          idx = pick(T.dirt, seed % 9973);
+        } else {
+          // weighted: mostly plain turf. Picking uniformly from the three
+          // grass tiles put a flower on every third tile, which read as
+          // confetti rather than ground.
+          var g = seededRandom(seed % 7919);
+          idx = g < 0.78 ? T.grass[0] : (g < 0.96 ? T.grass[1] : T.grass[2]);
+        }
+        drawTile(ctx, idx, tx * TS - originX, ty * TS - originY);
+      }
+    }
+
+    // ---- props: houses fronting the streets, trees and hedging elsewhere
+    var props = [];
+    segs.forEach(function (sg, si) {
+      var dx = sg.bx - sg.ax, dy = sg.by - sg.ay;
+      var len = Math.hypot(dx, dy);
+      if (len < 0.5) return;
+      var ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
+      var spacing = sg.residential ? 14 : 30;
+      for (var d = 0; d < len; d += spacing) {
+        var bx = sg.ax + ux * d, by = sg.ay + uy * d;
+        var seed = si * 7919 + Math.round(d * 13);
+        [-1, 1].forEach(function (side) {
+          var wx = bx + nx * 9 * side, wy = by + ny * 9 * side;
+          var roll = seededRandom(seed * (side > 0 ? 1.7 : 2.9));
+          if (sg.residential && roll > 0.3) {
+            props.push({ kind: "house", x: wx, y: wy, v: Math.floor(roll * 4) % 4, sortY: wy });
+          } else if (roll > 0.55) {
+            props.push({ kind: "tree", x: wx, y: wy, t: pick(T.treeGreen, seed), sortY: wy });
+          } else if (roll > 0.4) {
+            props.push({ kind: "bush", x: wx, y: wy, sortY: wy });
+          }
+        });
+      }
+    });
+
+    // 3/4 camera: lower on screen is nearer, so it draws last
     props.sort(function (p, q) { return p.sortY - q.sortY; });
     props.forEach(function (p) {
       var s = mToPx(p.x, p.y);
-      if (s.x < -80 || s.x > W + 80 || s.y < -80 || s.y > H + 80) return;
-      if (p.kind === "house") drawHouseS(ctx, s.x, s.y, p.v);
-      else if (p.kind === "hedge") drawHedgeS(ctx, s.x - 26, s.y, 52);
-      else if (p.kind === "tree") drawTreeS(ctx, s.x, s.y, p.s);
-      else if (p.kind === "bush") drawBushS(ctx, s.x, s.y, 16);
-      else if (p.kind === "lamp") drawLampS(ctx, s.x, s.y);
+      if (s.x < -60 || s.x > W + 60 || s.y < -60 || s.y > H + 60) return;
+      if (p.kind === "house") {
+        var h = T.houses[p.v];
+        var hx = Math.round(s.x) - TS * 1.5, hy = Math.round(s.y) - TS * 3;
+        for (var i = 0; i < 3; i++) {
+          drawTile(ctx, h.roof[i], hx + i * TS, hy);
+          drawTile(ctx, h.mid[i], hx + i * TS, hy + TS);
+          drawTile(ctx, h.wall[i], hx + i * TS, hy + TS * 2);
+        }
+      } else if (p.kind === "tree") {
+        drawTile(ctx, p.t, s.x - TS / 2, s.y - TS);
+      } else if (p.kind === "bush") {
+        drawTile(ctx, T.bush, s.x - TS / 2, s.y - TS);
+      }
     });
 
-    // ---- walked route ----
-    // Dashed and low-contrast on purpose: a solid stroke at this zoom read
-    // as a painted stripe down the middle of the carriageway.
+    // ---- walked route: dashed so it reads as a trodden line, not paint ----
     if (state.points.length > 1) {
       ctx.save();
       ctx.setLineDash([2, 4]);
-      ctx.strokeStyle = PAL.trailFar;
+      ctx.strokeStyle = "rgba(60,45,25,0.30)";
       ctx.lineWidth = 2;
       state.walks.forEach(function (walk) {
         ctx.beginPath();
@@ -1686,7 +1533,7 @@
     if (pb.walkIndex !== null && pb.trailPoints && pb.trailPoints.length > 1) {
       ctx.save();
       ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = PAL.trailNear;
+      ctx.strokeStyle = "#e8a33d";
       ctx.lineWidth = 2;
       ctx.beginPath();
       pb.trailPoints.forEach(function (pt, i) {
@@ -1697,14 +1544,28 @@
       ctx.restore();
     }
 
-    // ---- overlay markers, in screen pixels over the canvas ----
+    // ---- dim ground the dog has not walked yet ----
+    ctx.fillStyle = "rgba(24, 30, 40, 0.34)";
+    for (var ty2 = t0y; ty2 <= t1y; ty2++) {
+      for (var tx2 = t0x; tx2 <= t1x; tx2++) {
+        var cxm = (tx2 + 0.5) * TS / PX_PER_M, cym = (ty2 + 0.5) * TS / PX_PER_M;
+        var b = state.bounds;
+        var lat = b.maxLat - cym / 111320;
+        var lng = b.minLng + cxm / (111320 * Math.cos(b.minLat * Math.PI / 180));
+        if (lat > b.maxLat || lat < b.minLat || lng < b.minLng || lng > b.maxLng) continue;
+        var cell = pointToCell({ lat: lat, lng: lng }, b);
+        if (state.grid[cell.row][cell.col].explored) continue;
+        ctx.fillRect(tx2 * TS - originX, ty2 * TS - originY, TS, TS);
+      }
+    }
+
+    // ---- overlay markers, positioned in screen pixels over the canvas ----
     overlay.innerHTML = "";
-    var scale = ZOOM_LEVELS[zoomIndex];
     function place(cls, glyph, lat, lng) {
       var s = toPx(lat, lng);
       if (s.x < -40 || s.x > W + 40 || s.y < -40 || s.y > H + 40) return;
       overlay.innerHTML += '<span class="' + cls + '" style="left:' +
-        (s.x * scale).toFixed(1) + 'px;top:' + (s.y * scale).toFixed(1) + 'px">' + glyph + '</span>';
+        (s.x * zoom).toFixed(1) + 'px;top:' + (s.y * zoom).toFixed(1) + 'px">' + glyph + '</span>';
     }
 
     state.grid.forEach(function (row, r) {
@@ -1716,14 +1577,12 @@
         place("map-treasure", cellV.treasure, lat, lng);
       });
     });
-    place("map-marker", "🏡", state.points[0].lat, state.points[0].lng);
+    place("map-marker", "\ud83c\udfe1", state.points[0].lat, state.points[0].lng);
     var lastP = state.points[state.points.length - 1];
-    place("map-marker last", "🐾", lastP.lat, lastP.lng);
+    place("map-marker last", "\ud83d\udc3e", lastP.lat, lastP.lng);
     if (pb.walkIndex !== null && pb.dogAt) {
-      place("map-marker dog", "🐕", pb.dogAt.lat, pb.dogAt.lng);
+      place("map-marker dog", "\ud83d\udc15", pb.dogAt.lat, pb.dogAt.lng);
     }
-
-    if (!sceneReady) { sceneReady = true; }
   }
 
   function ensureCentred() {
