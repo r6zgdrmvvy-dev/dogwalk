@@ -29,7 +29,7 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  #game { position: fixed; inset: 0; }
+  #game { position: fixed; inset: 0; touch-action: none; }
   #game canvas { display: block; }
 
   /* ---------- loading ---------- */
@@ -136,10 +136,17 @@
   input[type=file] { display: none; }
 
   @media (max-width: 720px) {
-    #walks { width: 190px; max-height: 34vh; }
-    #clock { display: none; }
-    .stat { min-width: 62px; padding: 5px 9px; }
-    .stat b { font-size: 16px; }
+    #hud-top { padding: 8px; }
+    .stat { min-width: 0; padding: 5px 8px; }
+    .stat b { font-size: 15px; }
+    .stat span { font-size: 9px; }
+    .btn { padding: 9px 12px; }          /* fingers, not cursors */
+
+    #hud-bottom { flex-direction: column; align-items: stretch; padding: 8px; gap: 8px; }
+    #walks { width: auto; max-height: 30vh; }
+    #transport { max-width: none; flex-wrap: wrap; }
+    #scrub { min-width: 120px; height: 26px; }
+    #clock { min-width: 0; flex: 1; text-align: left; font-size: 12px; }
   }
 </style>
 </head>
@@ -166,6 +173,7 @@
     <button class="btn primary" id="btn-play">Pause</button>
     <input type="range" id="scrub" min="0" max="1000" value="0">
     <div class="speed">
+      <button class="btn" data-speed="0.5">½×</button>
       <button class="btn on" data-speed="1">1×</button>
       <button class="btn" data-speed="2">2×</button>
       <button class="btn" data-speed="4">4×</button>
@@ -655,7 +663,11 @@
       });
       this.buildLevel();
 
+      this.input.addPointer(2);          // two-finger gestures
+      this.pinchDist = null;
+
       this.input.on("pointermove", function (p) {
+        if (this.input.pointer2 && this.input.pointer2.isDown) return;  // pinching
         if (!p.isDown || pb.playing) return;
         var cam = this.cameras.main;
         cam.scrollX -= (p.x - p.prevPosition.x) / cam.zoom;
@@ -783,11 +795,23 @@
     }
 
     update(time, delta) {
+      this.handlePinch();
       if (!pb.playing || !pb.walk) return;
       pb.elapsed += delta * pb.speed;
       var progress = Math.min(pb.elapsed / pb.duration, 1);
       this.applyProgress(progress);
       if (progress >= 1) { pb.playing = false; setPlayLabel(); this.dog.play("sit"); }
+    }
+
+    handlePinch() {
+      var p1 = this.input.pointer1, p2 = this.input.pointer2;
+      if (!p1 || !p2 || !p1.isDown || !p2.isDown) { this.pinchDist = null; return; }
+      var d = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
+      if (this.pinchDist && d > 0) {
+        var cam = this.cameras.main;
+        cam.setZoom(Phaser.Math.Clamp(cam.zoom * (d / this.pinchDist), 1.5, 8));
+      }
+      this.pinchDist = d;
     }
 
     applyProgress(progress) {
@@ -891,10 +915,10 @@
     var walk = state.walks[i];
     if (!walk || walk.length < 2) return;
     pb.walk = walk; pb.index = i; pb.playing = true; pb.elapsed = 0;
-    // Roughly a real-time-ish amble: fast enough to watch a whole walk,
-    // slow enough to actually follow the dog. 1x is the slow one; the
-    // speed buttons multiply from here.
-    pb.duration = Math.min(180000, Math.max(35000, walk.length * 750));
+    // Deliberately slow: a 20-minute walk plays over roughly four minutes,
+    // about a fifth of real time, so the dog ambles rather than darts. The
+    // speed buttons multiply up from here, and 0.5x halves it again.
+    pb.duration = Math.min(600000, Math.max(120000, walk.length * 2500));
     document.getElementById("transport").classList.remove("off");
     setPlayLabel();
     renderWalkList();
