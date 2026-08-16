@@ -746,6 +746,49 @@
   //  Phaser
   // ============================================================
 
+  // ---------- post-processing ----------
+  // Bloom on the bright stuff, a touch of contrast, vignette and film
+  // grain. Pixel art rendered flat looks like a spritesheet; a grade makes
+  // it look photographed.
+  var GradeFX = null;
+  if (window.Phaser && Phaser.Renderer && Phaser.Renderer.WebGL &&
+      Phaser.Renderer.WebGL.Pipelines && Phaser.Renderer.WebGL.Pipelines.PostFXPipeline) {
+    GradeFX = class extends Phaser.Renderer.WebGL.Pipelines.PostFXPipeline {
+      constructor(game) {
+        super({
+          game: game,
+          fragShader: [
+            "precision mediump float;",
+            "uniform sampler2D uMainSampler;",
+            "uniform float uTime;",
+            "varying vec2 outTexCoord;",
+            "float rand(vec2 c){ return fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453); }",
+            "void main() {",
+            "  vec2 uv = outTexCoord;",
+            "  vec4 col = texture2D(uMainSampler, uv);",
+            "  vec3 b = texture2D(uMainSampler, uv + vec2( 0.0020, 0.0)).rgb",
+            "         + texture2D(uMainSampler, uv + vec2(-0.0020, 0.0)).rgb",
+            "         + texture2D(uMainSampler, uv + vec2(0.0,  0.0026)).rgb",
+            "         + texture2D(uMainSampler, uv + vec2(0.0, -0.0026)).rgb;",
+            "  b *= 0.25;",
+            "  float lum = dot(b, vec3(0.299, 0.587, 0.114));",
+            "  col.rgb += b * smoothstep(0.60, 1.0, lum) * 0.38;",
+            "  col.rgb = (col.rgb - 0.5) * 1.07 + 0.5;",
+            "  float g = dot(col.rgb, vec3(0.299, 0.587, 0.114));",
+            "  col.rgb = mix(vec3(g), col.rgb, 0.93);",
+            "  vec2 d = uv - 0.5;",
+            "  col.rgb *= 1.0 - dot(d, d) * 0.55;",
+            "  col.rgb += (rand(uv * (uTime + 1.0)) - 0.5) * 0.032;",
+            "  gl_FragColor = col;",
+            "}"
+          ].join("\n")
+        });
+      }
+      onPreRender() { this.set1f("uTime", this.game.loop.time * 0.001); }
+    };
+  }
+
+
   var game = null, scene = null;
   var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0 };
 
@@ -804,6 +847,10 @@
       rg.fillStyle(0xbcd2e8, 1); rg.fillRect(0, 0, 1, 8);
       rg.generateTexture("raindrop", 1, 8); rg.destroy();
       this.rain = null;
+
+      if (GradeFX && this.renderer && this.renderer.type === Phaser.WEBGL) {
+        this.cameras.main.setPostPipeline(GradeFX);
+      }
 
       this.scale.on("resize", this.fitOverlays, this);
       this.fitOverlays();
@@ -1263,6 +1310,7 @@
     backgroundColor: "#3b3f33",
     pixelArt: true,
     scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+    pipeline: GradeFX ? { GradeFX: GradeFX } : undefined,
     scene: [BootScene, WorldScene]
   });
 
