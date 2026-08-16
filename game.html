@@ -426,31 +426,45 @@
   // ============================================================
 
   var TS = 16;              // tileset tile size, px
-  var TS_COLS = 12;
+  var TS_COLS = 8;
   var MAX_TILES = 160000;   // keeps the Phaser tilemap to a sane object count
 
-  // Kenney Tiny Town indices
+  // Generated city tileset (assets/city.png). Pure top-down, GTA-London
+  // grubby: soot tarmac, concrete pavement, brick and lead rooftops.
   var TILE = {
-    grass: [0, 1, 2],
-    dirtC: 25,                              // interior of a dirt area
-    dirtVar: [39, 40, 41, 42],
-    // 3x3 dirt-with-grass-border autotile
-    edge: { nw: 12, n: 13, ne: 14, w: 24, c: 25, e: 26, sw: 36, s: 37, se: 38 },
-    water: 43,
-    // Kenney's broadleaf trees are two tiles stacked: a canopy top and a
-    // canopy-plus-trunk bottom. Drawing only the bottom half is what made
-    // them look like antlers. 28 is a single-tile conifer.
-    trees: [[4, 16], [4, 16], [3, 15], [null, 28]],
-    bush: 5, plants: 17,
-    houses: [
-      { roof: [48, 49, 50], mid: [60, 63, 62], wall: [84, 85, 86] },
-      { roof: [52, 53, 54], mid: [64, 67, 66], wall: [84, 85, 86] },
-      { roof: [48, 49, 50], mid: [60, 63, 62], wall: [88, 89, 90] },
-      { roof: [52, 53, 54], mid: [64, 67, 66], wall: [88, 89, 90] }
-    ]
+    asphalt: 0, dashH: 1, dashV: 2,
+    pave: 3, kerb: 4,
+    grass: 5, waste: 6,
+    // five roof colours, each an (interior, edge) pair from index 7
+    roofPairs: [[7, 8], [9, 10], [11, 12], [13, 14], [15, 16]],
+    trees: [17, 18]
   };
 
   var world = null;
+
+  // Value noise on a coarse lattice, bilinearly sampled. Per-tile random
+  // would just be speckle; real ground varies over metres, not centimetres.
+  function makeNoise(cols, rows, cell, salt) {
+    var gw = Math.ceil(cols / cell) + 2, gh = Math.ceil(rows / cell) + 2;
+    var g = new Float32Array(gw * gh);
+    for (var i = 0; i < g.length; i++) g[i] = seededRandom((i + 1) * 3.77 + salt);
+    return function (x, y) {
+      var fx = x / cell, fy = y / cell;
+      var x0 = Math.floor(fx), y0 = Math.floor(fy);
+      var tx = fx - x0, ty = fy - y0;
+      var a = g[y0 * gw + x0] || 0, b = g[y0 * gw + x0 + 1] || 0;
+      var c = g[(y0 + 1) * gw + x0] || 0, d = g[(y0 + 1) * gw + x0 + 1] || 0;
+      tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);   // smoothstep
+      return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
+    };
+  }
+
+  function mixHex(lo, hi, t) {
+    var r = Math.round(((lo >> 16) & 255) + (((hi >> 16) & 255) - ((lo >> 16) & 255)) * t);
+    var g2 = Math.round(((lo >> 8) & 255) + (((hi >> 8) & 255) - ((lo >> 8) & 255)) * t);
+    var b2 = Math.round((lo & 255) + ((hi & 255) - (lo & 255)) * t);
+    return (r << 16) | (g2 << 8) | b2;
+  }
 
   function segDist(px, py, ax, ay, bx, by) {
     var dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
@@ -527,101 +541,151 @@
         }
     });
 
-    var isRoad = new Uint8Array(cols * rows);
-    var kindMap = new Uint8Array(cols * rows);   // 0 grass, 1 wood, 2 park, 3 water
+    var ROAD_HALF = 4.0, PAVE = 2.4, BLOCK_DEPTH = 34;
+
+    var kindMap = new Uint8Array(cols * rows);   // 0 open, 1 road, 2 pave, 3 park, 4 building
+    var majorMap = new Uint8Array(cols * rows);
+    var alongH = new Uint8Array(cols * rows);
+    var bCellX = new Int32Array(cols * rows);
+    var bCellY = new Int32Array(cols * rows);
+    var visIdx = new Array(cols * rows);
+
+    // Where the dog has actually been, rasterised at 14m. The old fog was
+    // drawn over a 28x16 grid, which at street scale meant slabs of darkness
+    // the size of whole neighbourhoods.
+    var VIS = 14;
+    var visited = {};
+    state.points.forEach(function (pt) {
+      var m = toM(pt.lat, pt.lng);
+      var cx = Math.floor(m.x / VIS), cy = Math.floor(m.y / VIS);
+      for (var ox = -1; ox <= 1; ox++)
+        for (var oy = -1; oy <= 1; oy++) visited[(cx + ox) + "," + (cy + oy)] = 1;
+    });
+
     for (var ty = 0; ty < rows; ty++) {
       for (var tx = 0; tx < cols; tx++) {
         var mx = (tx + 0.5) * mpt, my = (ty + 0.5) * mpt;
         var k = Math.floor(mx / BUCKET) + "," + Math.floor(my / BUCKET);
-        var list = buckets[k];
-        var road = false;
-        if (list) {
-          for (var li = 0; li < list.length; li++) {
-            var s = segs[list[li]];
-            if (segDist(mx, my, s.ax, s.ay, s.bx, s.by) < s.half) { road = true; break; }
-          }
+        var list = buckets[k] || [];
+        var best = 1e9, bestSeg = null;
+        for (var li = 0; li < list.length; li++) {
+          var sg = segs[list[li]];
+          var d = segDist(mx, my, sg.ax, sg.ay, sg.bx, sg.by);
+          if (d < best) { best = d; bestSeg = sg; }
         }
-        isRoad[ty * cols + tx] = road ? 1 : 0;
-        var kk = 0;
-        for (var ai = 0; ai < areas.length; ai++) {
-          if (inArea(areas[ai], mx, my)) {
-            kk = areas[ai].kind === "water" ? 3 : (areas[ai].kind === "wood" ? 1 : 2);
-            if (kk === 3) break;
+        var i = ty * cols + tx, kind;
+        var half = bestSeg ? bestSeg.half + 1.6 : 0;
+        if (bestSeg && best < half) kind = 1;
+        else if (bestSeg && best < half + PAVE) kind = 2;
+        else {
+          var park = false;
+          for (var ai = 0; ai < areas.length; ai++) {
+            if (areas[ai].kind !== "water" && inArea(areas[ai], mx, my)) { park = true; break; }
           }
+          // City blocks fill the land fronting the streets; beyond that it
+          // is scrub. This is what makes it read as a city rather than
+          // buildings scattered on a field.
+          var frontage = half + PAVE;
+          if (park) kind = 3;
+          else if (best < frontage + 13) kind = 4;        // the house itself
+          else if (best < frontage + 30) kind = 3;        // its garden
+          else kind = 0;                                   // back land / scrub
         }
-        kindMap[ty * cols + tx] = kk;
+        kindMap[i] = kind;
+        if (bestSeg && bestSeg.major) majorMap[i] = 1;
+        if (bestSeg) alongH[i] = Math.abs(bestSeg.bx - bestSeg.ax) >= Math.abs(bestSeg.by - bestSeg.ay) ? 1 : 0;
+        // which ~9m building footprint this tile belongs to, so a block
+        // reads as a terrace of separate houses instead of one flat mass
+        bCellX[i] = Math.floor(mx / 9);
+        bCellY[i] = Math.floor(my / 9);
+        visIdx[i] = Math.floor(mx / VIS) + "," + Math.floor(my / VIS);
       }
     }
 
-    // ---- tile indices, with the dirt edges autotiled ----
+    // ---- tile indices ----
     var data = [];
     for (var y = 0; y < rows; y++) {
       var line = [];
       for (var x = 0; x < cols; x++) {
-        var i = y * cols + x;
+        var ii = y * cols + x, kk = kindMap[ii];
         var seed = Math.abs((x * 73856093) ^ (y * 19349663));
-        if (kindMap[i] === 3 && !isRoad[i]) { line.push(TILE.water); continue; }
-        if (!isRoad[i]) {
-          var g = seededRandom(seed % 7919);
-          line.push(g < 0.8 ? TILE.grass[0] : (g < 0.96 ? TILE.grass[1] : TILE.grass[2]));
-          continue;
+        if (kk === 1) {
+          // centre line only down the middle of the bigger roads
+          var mid = majorMap[ii] && (seed % 5 === 0);
+          line.push(mid ? (alongH[ii] ? TILE.dashH : TILE.dashV) : TILE.asphalt);
+        } else if (kk === 2) {
+          var nextToRoad =
+            (x > 0 && kindMap[ii - 1] === 1) || (x < cols - 1 && kindMap[ii + 1] === 1) ||
+            (y > 0 && kindMap[ii - cols] === 1) || (y < rows - 1 && kindMap[ii + cols] === 1);
+          line.push(nextToRoad ? TILE.kerb : TILE.pave);
+        } else if (kk === 3) {
+          line.push(TILE.grass);
+        } else if (kk === 4) {
+          var bid = Math.abs((bCellX[ii] * 92837) ^ (bCellY[ii] * 689287));
+          var pair = TILE.roofPairs[bid % TILE.roofPairs.length];
+          var sameCell = function (j) {
+            return j >= 0 && j < cols * rows && kindMap[j] === 4 &&
+                   bCellX[j] === bCellX[ii] && bCellY[j] === bCellY[ii];
+          };
+          var edge = !(x > 0 && sameCell(ii - 1)) || !(x < cols - 1 && sameCell(ii + 1)) ||
+                     !(y > 0 && sameCell(ii - cols)) || !(y < rows - 1 && sameCell(ii + cols));
+          line.push(edge ? pair[1] : pair[0]);
+        } else {
+          line.push(seededRandom(seed % 7919) < 0.7 ? TILE.waste : TILE.grass);
         }
-        // autotile: pick the border piece that matches which neighbours are grass
-        var N = y > 0 && isRoad[(y - 1) * cols + x];
-        var S = y < rows - 1 && isRoad[(y + 1) * cols + x];
-        var W = x > 0 && isRoad[i - 1];
-        var E = x < cols - 1 && isRoad[i + 1];
-        var e = TILE.edge, t;
-        if (!N && !W) t = e.nw; else if (!N && !E) t = e.ne;
-        else if (!S && !W) t = e.sw; else if (!S && !E) t = e.se;
-        else if (!N) t = e.n; else if (!S) t = e.s;
-        else if (!W) t = e.w; else if (!E) t = e.e;
-        else t = seededRandom(seed % 9973) < 0.7 ? e.c : TILE.dirtVar[seed % TILE.dirtVar.length];
-        line.push(t);
       }
       data.push(line);
     }
 
-    // ---- props ----
-    var props = [];
-    var occupied = {};
-    segs.forEach(function (s, si) {
-      var dx = s.bx - s.ax, dy = s.by - s.ay, len = Math.hypot(dx, dy);
-      if (len < 1 || !s.residential) return;
-      var ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
-      for (var d = 0; d < len; d += 15) {
-        var bx = s.ax + ux * d, by = s.ay + uy * d;
-        for (var side = -1; side <= 1; side += 2) {
-          var hx = bx + nx * 10 * side, hy = by + ny * 10 * side;
-          var seed = si * 7919 + Math.round(d * 13) + (side > 0 ? 1 : 0);
-          if (seededRandom(seed) < 0.35) continue;
-          var cellKey = Math.round(hx / 8) + "," + Math.round(hy / 8);
-          if (occupied[cellKey]) continue;
-          occupied[cellKey] = 1;
-          props.push({ kind: "house", x: hx, y: hy, v: Math.floor(seededRandom(seed * 3.1) * 4) % 4 });
+    // ---- street and park labels, straight off the OSM name tags ----
+    var labels = [];
+    var seenNames = {};
+    (state.osmWays || []).forEach(function (wy) {
+      var t = wy.tags || {};
+      if (!t.name || !wy.geometry || wy.geometry.length < 2) return;
+      if (t.highway) {
+        // Repeat the name along the street every ~70m, the way a street
+        // atlas does. One label per way put most streets off-screen at
+        // walking zoom.
+        var acc = 1e9;
+        for (var i2 = 0; i2 < wy.geometry.length - 1; i2++) {
+          var q0 = toM(wy.geometry[i2].lat, wy.geometry[i2].lon);
+          var q1 = toM(wy.geometry[i2 + 1].lat, wy.geometry[i2 + 1].lon);
+          var L = Math.hypot(q1.x - q0.x, q1.y - q0.y);
+          if (L < 1) continue;
+          acc += L;
+          if (acc < 70 || L < 14) continue;
+          acc = 0;
+          var ang = Math.atan2(q1.y - q0.y, q1.x - q0.x);
+          if (ang > Math.PI / 2) ang -= Math.PI;
+          if (ang < -Math.PI / 2) ang += Math.PI;
+          labels.push({ name: t.name, x: (q0.x + q1.x) / 2, y: (q0.y + q1.y) / 2,
+                        angle: ang, kind: "street" });
         }
+      } else if (t.leisure === "park" || t.landuse === "recreation_ground" || t.leisure === "nature_reserve") {
+        var pts2 = wy.geometry.map(function (g2) { return toM(g2.lat, g2.lon); });
+        var cx = 0, cy = 0;
+        pts2.forEach(function (q) { cx += q.x; cy += q.y; });
+        labels.push({ name: t.name, x: cx / pts2.length, y: cy / pts2.length, angle: 0, kind: "area" });
       }
     });
 
-    // trees in woodland/park, and a scattering elsewhere
-    for (var ty2 = 0; ty2 < rows; ty2 += 1) {
-      for (var tx2 = 0; tx2 < cols; tx2 += 1) {
-        var ii = ty2 * cols + tx2;
-        if (isRoad[ii] || kindMap[ii] === 3) continue;
-        var sd = Math.abs((tx2 * 31337) ^ (ty2 * 6971));
-        var chance = kindMap[ii] === 1 ? 0.5 : (kindMap[ii] === 2 ? 0.16 : 0.035);
-        var rr = seededRandom(sd % 5003);
-        if (rr > chance) continue;
-        var wx2 = (tx2 + 0.5) * mpt, wy2 = (ty2 + 0.5) * mpt;
-        var ck = Math.round(wx2 / 8) + "," + Math.round(wy2 / 8);
-        if (occupied[ck]) continue;
-        var pair = TILE.trees[sd % TILE.trees.length];
-        props.push({ kind: rr < chance * 0.72 ? "tree" : "bush", x: wx2, y: wy2,
-                     tt: pair[0], tb: pair[1] });
+    var trees = [];
+    for (var tyy = 0; tyy < rows; tyy++) {
+      for (var txx = 0; txx < cols; txx++) {
+        var ti = tyy * cols + txx;
+        if (kindMap[ti] !== 3) continue;
+        var tseed = Math.abs((txx * 31337) ^ (tyy * 6971));
+        if (seededRandom(tseed % 5003) > 0.11) continue;
+        trees.push({ x: (txx + 0.5) * mpt, y: (tyy + 0.5) * mpt,
+                     t: TILE.trees[tseed % TILE.trees.length] });
       }
     }
 
-    world = { cols: cols, rows: rows, mpt: mpt, data: data, props: props,
+    var seen = new Uint8Array(cols * rows);
+    for (var si2 = 0; si2 < cols * rows; si2++) seen[si2] = visited[visIdx[si2]] ? 1 : 0;
+
+    world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen, trees: trees,
               toM: toM, widthM: widthM, heightM: heightM };
     return world;
   }
@@ -638,8 +702,8 @@
 
     preload() {
       var bar = document.querySelector("#bar i");
-      this.load.spritesheet("tiles", "assets/tiny-town-glasgow.png", { frameWidth: TS, frameHeight: TS });
-      this.load.spritesheet("dog", "assets/dog.png", { frameWidth: 16, frameHeight: 16 });
+      this.load.spritesheet("tiles", "assets/city.png", { frameWidth: TS, frameHeight: TS });
+      this.load.spritesheet("dog", "assets/dog-topdown.png", { frameWidth: 16, frameHeight: 16 });
       this.load.on("progress", function (v) { bar.style.width = Math.round(v * 100) + "%"; });
     }
 
@@ -685,9 +749,9 @@
     // Rebuilt whenever the walk data changes.
     buildLevel() {
       if (this.layer) { this.layer.destroy(); this.layer = null; }
-      if (this.propGroup) this.propGroup.clear(true, true);
+      if (this.labelGroup) this.labelGroup.clear(true, true);
+      if (this.treeGroup) this.treeGroup.clear(true, true);
       if (this.trailGfx) this.trailGfx.clear();
-      if (this.fogGfx) this.fogGfx.clear();
       if (this.treasureGroup) this.treasureGroup.clear(true, true);
 
       var w = buildWorld();
@@ -696,50 +760,58 @@
       this.layer = map.createLayer(0, tileset, 0, 0);
       this.map = map;
 
-      this.propGroup = this.propGroup || this.add.group();
+      // Tint each tile from two noise fields so the ground reads as mottled
+      // turf and worn tarmac rather than one flat colour tiled to infinity.
+      var broad = makeNoise(w.cols, w.rows, 9, 11.3);
+      var fine = makeNoise(w.cols, w.rows, 3, 47.9);
+      this.layer.forEachTile(function (tile) {
+        var n = broad(tile.x, tile.y) * 0.72 + fine(tile.x, tile.y) * 0.28;
+        var i = tile.index;
+        if (!w.seen[tile.y * w.cols + tile.x]) {
+          // unwalked ground: dimmed in place, at tile resolution
+          tile.tint = mixHex(0x2e3440, 0x424a5a, n);
+          return;
+        }
+        if (i === TILE.grass || i === TILE.waste) {
+          tile.tint = mixHex(0xa8b49c, 0xffffff, n);        // mottled turf
+        } else if (i === TILE.asphalt || i === TILE.dashH || i === TILE.dashV) {
+          tile.tint = mixHex(0xc8c8cc, 0xffffff, n);        // wet, patched tarmac
+        } else if (i === TILE.pave || i === TILE.kerb) {
+          tile.tint = mixHex(0xd8d6d0, 0xffffff, n);
+        } else {
+          tile.tint = mixHex(0xdcdcdc, 0xffffff, n * 0.6 + 0.4);   // roofs vary least
+        }
+      });
+
       this.treasureGroup = this.treasureGroup || this.add.group();
 
       var self = this;
       var scale = TS / w.mpt;   // world metres -> pixels
 
-      w.props.forEach(function (p) {
-        var px = p.x * scale, py = p.y * scale;
-        if (p.kind === "house") {
-          var h = TILE.houses[p.v];
-          for (var r = 0; r < 3; r++) {
-            for (var c = 0; c < 3; c++) {
-              var frame = r === 0 ? h.roof[c] : (r === 1 ? h.mid[c] : h.wall[c]);
-              var img = self.add.image(px + (c - 1) * TS, py + (r - 2) * TS, "tiles", frame)
-                .setOrigin(0.5).setDepth(py);
-              self.propGroup.add(img);
-            }
-          }
-        } else if (p.kind === "tree") {
-          if (p.tt !== null && p.tt !== undefined) {
-            self.propGroup.add(self.add.image(px, py - TS, "tiles", p.tt)
-              .setOrigin(0.5, 0.85).setDepth(py));
-          }
-          self.propGroup.add(self.add.image(px, py, "tiles", p.tb)
-            .setOrigin(0.5, 0.85).setDepth(py));
-        } else {
-          self.propGroup.add(self.add.image(px, py, "tiles", TILE.bush)
-            .setOrigin(0.5, 0.85).setDepth(py));
-        }
+      this.treeGroup = this.treeGroup || this.add.group();
+      w.trees.forEach(function (tr) {
+        var tx = Math.floor(tr.x / w.mpt), ty2 = Math.floor(tr.y / w.mpt);
+        if (!w.seen[ty2 * w.cols + tx]) return;
+        self.treeGroup.add(self.add.image(tr.x * scale, tr.y * scale, "tiles", tr.t)
+          .setOrigin(0.5).setDepth(tr.y * scale));
       });
 
-      // fog over ground the dog has not walked
-      this.fogGfx = this.fogGfx || this.add.graphics().setDepth(90000);
-      this.fogGfx.clear();
-      this.fogGfx.fillStyle(0x0d1119, 0.5);
-      var b = state.bounds;
-      for (var r2 = 0; r2 < GRID_ROWS; r2++) {
-        for (var c2 = 0; c2 < GRID_COLS; c2++) {
-          if (state.grid[r2][c2].explored) continue;
-          var x0 = (c2 / GRID_COLS) * w.cols * TS, x1 = ((c2 + 1) / GRID_COLS) * w.cols * TS;
-          var y0 = (r2 / GRID_ROWS) * w.rows * TS, y1 = ((r2 + 1) / GRID_ROWS) * w.rows * TS;
-          this.fogGfx.fillRect(x0, y0, x1 - x0, y1 - y0);
-        }
-      }
+      // Street and park names, straight from the OSM name tags. Rotated to
+      // sit along their road the way a street atlas letters them.
+      this.labelGroup = this.labelGroup || this.add.group();
+      w.labels.forEach(function (lb) {
+        var isArea = lb.kind === "area";
+        var txt = self.add.text(lb.x * scale, lb.y * scale, lb.name.toUpperCase(), {
+          fontFamily: "Baloo 2, system-ui, sans-serif",
+          fontSize: isArea ? "10px" : "8px",
+          color: isArea ? "#d8ecбc".replace("б","b") : "#f0ece0",
+          stroke: "#15171a",
+          strokeThickness: 3
+        }).setOrigin(0.5).setDepth(200000).setResolution(4);
+        txt.setAlpha(isArea ? 0.95 : 0.88);
+        if (!isArea) txt.setRotation(lb.angle);
+        self.labelGroup.add(txt);
+      });
 
       // treasures
       for (var r3 = 0; r3 < GRID_ROWS; r3++) {
@@ -786,7 +858,7 @@
 
       var cam = this.cameras.main;
       cam.setBounds(0, 0, w.cols * TS, w.rows * TS);
-      cam.setZoom(4);
+      cam.setZoom(3);
       cam.centerOn(home.x * scale, home.y * scale);
       cam.roundPixels = true;
 
@@ -1072,7 +1144,7 @@
   game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "game",
-    backgroundColor: "#4f8f38",
+    backgroundColor: "#3b3f33",
     pixelArt: true,
     scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
     scene: [BootScene, WorldScene]
