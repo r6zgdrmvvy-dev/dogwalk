@@ -245,7 +245,6 @@
   //  Walk data
   // ============================================================
 
-  var GAP_MINUTES = 90;
   var TREASURE_CHANCE = 0.22;
   var TREASURES = ["🌰", "🦴", "🍂", "🎾", "🪵", "💭"];
   var MOCK_CENTER = { lat: 55.7936, lng: -4.2934 };
@@ -253,7 +252,7 @@
   var GRID_COLS = 28, GRID_ROWS = 16;   // coarse grid, only for the explored %
 
   var state = {
-    points: [], walks: [], bounds: null, grid: null,
+    points: [], walks: [], bounds: null, territory: null, grid: null,
     osmWays: null, dogName: "Your Dog"
   };
 
@@ -272,18 +271,113 @@
     return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
   }
 
-  function splitByGap(points, gapMinutes) {
-    var sorted = points.slice().sort(function (a, b) { return new Date(a.t) - new Date(b.t); });
-    var walks = [], current = [], gapMs = gapMinutes * 60000;
-    sorted.forEach(function (p) {
-      if (!current.length) { current.push(p); return; }
-      if (new Date(p.t) - new Date(current[current.length - 1].t) > gapMs) {
-        walks.push(current); current = [p];
-      } else current.push(p);
-    });
-    if (current.length) walks.push(current);
-    return walks;
+  // ---- turning a raw tracker feed into walks -------------------------------
+  // A GPS collar reports all day, including while the dog is asleep on the
+  // couch, so "points more than N minutes apart" does not find walks — on a
+  // real Tractive export it finds nothing at all, because there are no gaps.
+  // What separates a walk from the rest of the day is leaving the house.
+
+  var HOME_RADIUS_M = 75;     // beyond this, the dog is out
+  var HOME_CELL_M = 40;       // resolution of the home search
+  var HOME_BLIP_S = 300;      // a dip back inside this brief is still one walk
+  var MIN_WALK_S = 300;
+  var MIN_WALK_M = 250;
+  var TRANSIT_KMH = 15;       // faster than this, the dog is in the car
+  var TRANSIT_M = 250;
+  var GAP_SECONDS = 1800;     // collar quiet this long ends the walk
+  // Measured against a month of real Tractive data: inside a walk the collar
+  // reports every ~150s and the 99th percentile gap is 299s, so 30 minutes is
+  // clear of normal reporting while still catching a genuine break.
+
+  // Where the dog lives: the ~40m cell it spends the most time in. Measured by
+  // dwell time rather than fix count, so a tracker that reports more often when
+  // moving does not push "home" out onto the busiest street.
+  function findHome(points) {
+    if (points.length < 3) return null;
+    var cells = {}, best = null, bestDwell = -1;
+    var mPerDegLng = 111320 * Math.cos(points[0].lat * Math.PI / 180);
+    for (var i = 0; i < points.length; i++) {
+      var dt = i < points.length - 1
+        ? Math.min(1800, (new Date(points[i + 1].t) - new Date(points[i].t)) / 1000)
+        : 0;
+      var key = Math.round(points[i].lat * 111320 / HOME_CELL_M) + "," +
+                Math.round(points[i].lng * mPerDegLng / HOME_CELL_M);
+      var c = cells[key];
+      if (!c) c = cells[key] = { dwell: 0, lat: 0, lng: 0, n: 0 };
+      c.dwell += dt; c.lat += points[i].lat; c.lng += points[i].lng; c.n++;
+      if (c.dwell > bestDwell) { bestDwell = c.dwell; best = c; }
+    }
+    if (!best || bestDwell <= 0) return null;
+    return { lat: best.lat / best.n, lng: best.lng / best.n };
   }
+
+  // Break a run at the two things that end a walk without the dog coming home:
+  // the collar going quiet for a long stretch, and the dog covering ground too
+  // fast to have walked it. Being driven to the park is part of the day, but
+  // drawing it as a straight line through everyone's gardens is not.
+  function splitRun(seg) {
+    var out = [], cur = [seg[0]];
+    for (var i = 1; i < seg.length; i++) {
+      var dt = (new Date(seg[i].t) - new Date(seg[i - 1].t)) / 1000;
+      var dm = haversineKm(seg[i - 1], seg[i]) * 1000;
+      var quiet = dt > GAP_SECONDS;
+      var driven = dt > 0 && dm > TRANSIT_M && (dm / dt) * 3.6 > TRANSIT_KMH;
+      if (quiet || driven) { out.push(cur); cur = [seg[i]]; }
+      else cur.push(seg[i]);
+    }
+    out.push(cur);
+    return out;
+  }
+
+  function walkLengthM(seg) {
+    var d = 0;
+    for (var i = 1; i < seg.length; i++) d += haversineKm(seg[i - 1], seg[i]) * 1000;
+    return d;
+  }
+
+  function splitIntoWalks(points) {
+    var sorted = points.slice().sort(function (a, b) { return new Date(a.t) - new Date(b.t); });
+    if (sorted.length < 3) return sorted.length ? [sorted] : [];
+
+    var home = findHome(sorted);
+    if (!home) return [sorted];
+
+    var away = sorted.map(function (p) {
+      return haversineKm(p, home) * 1000 > HOME_RADIUS_M;
+    });
+
+    // contiguous runs spent away from home, tolerating a brief dip back inside
+    var runs = [], i = 0;
+    while (i < sorted.length) {
+      if (!away[i]) { i++; continue; }
+      var j = i;
+      while (j + 1 < sorted.length) {
+        if (away[j + 1]) { j++; continue; }
+        var k = j + 1;
+        while (k < sorted.length && !away[k]) k++;
+        if (k < sorted.length &&
+            (new Date(sorted[k].t) - new Date(sorted[j].t)) / 1000 < HOME_BLIP_S) j = k;
+        else break;
+      }
+      runs.push(sorted.slice(i, j + 1));
+      i = j + 1;
+    }
+
+    var walks = [];
+    runs.forEach(function (run) {
+      splitRun(run).forEach(function (seg) {
+        if (seg.length < 3) return;
+        var dur = (new Date(seg[seg.length - 1].t) - new Date(seg[0].t)) / 1000;
+        if (dur < MIN_WALK_S || walkLengthM(seg) < MIN_WALK_M) return;
+        walks.push(seg);
+      });
+    });
+
+    // A feed with no recognisable home (a one-off route, say) still has to play.
+    return walks.length ? walks : [sorted];
+  }
+
+  var MIN_WORLD_M = 420;   // a short walk still gets a street around it
 
   function computeBounds(points) {
     var lats = points.map(function (p) { return p.lat; });
@@ -292,8 +386,22 @@
     var minLng = Math.min.apply(null, lngs), maxLng = Math.max.apply(null, lngs);
     var padLat = Math.max(maxLat - minLat, 0.0012) * 0.08;
     var padLng = Math.max(maxLng - minLng, 0.0012) * 0.08;
-    return { minLat: minLat - padLat, maxLat: maxLat + padLat,
-             minLng: minLng - padLng, maxLng: maxLng + padLng };
+    minLat -= padLat; maxLat += padLat; minLng -= padLng; maxLng += padLng;
+
+    // Grow a tight bbox out to a floor, so a ten-minute round-the-block walk
+    // does not end up as a world barely wider than the street it is on.
+    var mPerDegLng = 111320 * Math.cos(minLat * Math.PI / 180);
+    var shortLat = MIN_WORLD_M / 111320 - (maxLat - minLat);
+    var shortLng = MIN_WORLD_M / mPerDegLng - (maxLng - minLng);
+    if (shortLat > 0) { minLat -= shortLat / 2; maxLat += shortLat / 2; }
+    if (shortLng > 0) { minLng -= shortLng / 2; maxLng += shortLng / 2; }
+    return { minLat: minLat, maxLat: maxLat, minLng: minLng, maxLng: maxLng };
+  }
+
+  function sameBounds(a, b) {
+    if (!a || !b) return false;
+    return Math.abs(a.minLat - b.minLat) < 1e-9 && Math.abs(a.maxLat - b.maxLat) < 1e-9 &&
+           Math.abs(a.minLng - b.minLng) < 1e-9 && Math.abs(a.maxLng - b.maxLng) < 1e-9;
   }
 
   function pointToCell(p, b) {
@@ -303,11 +411,27 @@
              col: Math.min(Math.max(col, 0), GRID_COLS - 1) };
   }
 
+  function boundsForWalk(walk) {
+    return computeBounds(walk && walk.length ? walk : state.points);
+  }
+
   function buildFromPoints(points) {
     if (!points.length) return;
     state.points = points.slice().sort(function (a, b) { return new Date(a.t) - new Date(b.t); });
-    state.walks = splitByGap(state.points, GAP_MINUTES);
-    state.bounds = computeBounds(state.points);
+    state.walks = splitIntoWalks(state.points);
+    // The world is built around ONE walk, not around every walk ever recorded.
+    // A month of real tracker data spans several kilometres once the odd day
+    // trip is included, and a world that size has to be drawn at ten-plus
+    // metres per tile — at which point a house is one tile and the street
+    // scene disappears. A single walk is usually about 600m across, which
+    // draws at two metres per tile.
+    state.bounds = boundsForWalk(state.walks[state.walks.length - 1]);
+
+    // "Explored" is a measure of the whole territory the dog has covered, so it
+    // is gridded over every walk rather than over whichever one is on screen.
+    var walked = [];
+    state.walks.forEach(function (w) { walked = walked.concat(w); });
+    state.territory = computeBounds(walked.length ? walked : state.points);
 
     var grid = [];
     for (var r = 0; r < GRID_ROWS; r++) {
@@ -316,7 +440,7 @@
       grid.push(row);
     }
     state.points.forEach(function (p) {
-      var cell = pointToCell(p, state.bounds);
+      var cell = pointToCell(p, state.territory);
       grid[cell.row][cell.col].explored = true;
     });
     for (var r2 = 0; r2 < GRID_ROWS; r2++) {
@@ -495,6 +619,7 @@
   };
 
   var world = null;
+  // exposed for the regression harness
 
   // Value noise on a coarse lattice, bilinearly sampled. Per-tile random
   // would just be speckle; real ground varies over metres, not centimetres.
@@ -605,7 +730,7 @@
 
     var ROAD_HALF = 4.0, PAVE = 2.4, BLOCK_DEPTH = 34;
 
-    var kindMap = new Uint8Array(cols * rows);   // 0 open, 1 road, 2 pave, 3 park, 4 building, 5 water
+    var kindMap = new Uint8Array(cols * rows);   // 0 open, 1 road, 2 pave, 3 park, 4 building, 5 water, 6 footpath
     var parkMap = new Uint8Array(cols * rows);   // green that is public, not a back garden
     var majorMap = new Uint8Array(cols * rows);
     var alongH = new Uint8Array(cols * rows);
@@ -645,13 +770,16 @@
         }
         var i = ty * cols + tx, kind;
         // Carriageway and pavement are floored at a tile and a bit each, so a
-        // street still reads as a street when the world is coarse.
-        var half = bestSeg ? Math.max(bestSeg.half + 0.8, mpt * 1.05) : 0;
+        // street still reads as a street when the world is coarse. A footway is
+        // never carriageway: OSM maps the path beside a road as its own way, and
+        // treating it as tarmac fuses the two into one enormous street.
+        var foot = bestSeg && bestSeg.minor;
+        var half = bestSeg ? Math.max(bestSeg.half + (foot ? 0 : 0.8), mpt * (foot ? 0.6 : 1.05)) : 0;
         // A pavement narrower than about a tile and a half rounds in and out
         // of existence along the street and reads as scattered slabs.
-        var paveW = Math.max(PAVE, mpt * 1.45);
-        if (bestSeg && best < half) kind = 1;
-        else if (bestSeg && best < half + paveW) kind = 2;
+        var paveW = foot ? 0 : Math.max(PAVE, mpt * 1.45);
+        if (bestSeg && best < half) kind = foot ? 6 : 1;
+        else if (bestSeg && !foot && best < half + paveW) kind = 2;
         else {
           var park = false, wet = false;
           for (var ai = 0; ai < areas.length; ai++) {
@@ -708,7 +836,7 @@
     // procedural frontage so sparsely-mapped areas still read as streets.
     if (nBuildings > 12) {
       for (var fi = 0; fi < cols * rows; fi++) {
-        if (kindMap[fi] === 1 || kindMap[fi] === 2 || kindMap[fi] === 5) continue;
+        if (kindMap[fi] === 1 || kindMap[fi] === 2 || kindMap[fi] === 5 || kindMap[fi] === 6) continue;
         kindMap[fi] = footprint[fi] >= 0 ? 4 : (kindMap[fi] === 4 ? 3 : kindMap[fi]);
       }
     }
@@ -738,6 +866,36 @@
         if (!split && gy < rows - 1 && bIdSrc[gi + cols] >= 0 && bIdSrc[gi + cols] !== bIdSrc[gi]) split = true;
         if (split) { kindMap[gi] = 3; bId[gi] = -1; }
       }
+    }
+
+    // Which green belongs to somebody's house. Garden furniture — plot hedges,
+    // driveways — only makes sense near a building; drawn across open ground it
+    // turns a playing field into a lattice of hedges. Computed on a coarse grid
+    // and dilated, which is cheap and quite accurate enough for a 30m question.
+    var NB = 8;                                        // coarse block, in tiles
+    var nbCols = Math.ceil(cols / NB), nbRows = Math.ceil(rows / NB);
+    var blk = new Uint8Array(nbCols * nbRows);
+    for (var ny = 0; ny < rows; ny++) {
+      for (var nx = 0; nx < cols; nx++) {
+        if (kindMap[ny * cols + nx] === 4) blk[Math.floor(ny / NB) * nbCols + Math.floor(nx / NB)] = 1;
+      }
+    }
+    var reach = Math.max(1, Math.round(30 / (mpt * NB)));
+    var nearBuilding = new Uint8Array(nbCols * nbRows);
+    for (var by2 = 0; by2 < nbRows; by2++) {
+      for (var bx2 = 0; bx2 < nbCols; bx2++) {
+        if (!blk[by2 * nbCols + bx2]) continue;
+        for (var oy3 = -reach; oy3 <= reach; oy3++) {
+          for (var ox3 = -reach; ox3 <= reach; ox3++) {
+            var qy = by2 + oy3, qx = bx2 + ox3;
+            if (qy < 0 || qy >= nbRows || qx < 0 || qx >= nbCols) continue;
+            nearBuilding[qy * nbCols + qx] = 1;
+          }
+        }
+      }
+    }
+    function isResidential(tx2, ty2) {
+      return !!nearBuilding[Math.floor(ty2 / NB) * nbCols + Math.floor(tx2 / NB)];
     }
 
     // Which colour each building roof is, so its wall matches, and where a
@@ -843,15 +1001,19 @@
           // Boundary hedges between neighbouring plots. Without these the
           // gardens merge into one green field and the street stops reading
           // as a row of separate homes.
-          var plotEdge = !parkMap[ii] && (
-            (x > 0 && kindMap[ii - 1] === 3 && !parkMap[ii - 1] && bCellX[ii - 1] !== bCellX[ii]) ||
-            (y > 0 && kindMap[ii - cols] === 3 && !parkMap[ii - cols] && bCellY[ii - cols] !== bCellY[ii]));
+          var garden = !parkMap[ii] && isResidential(x, y);
+          var plotEdge = garden && (
+            (x > 0 && kindMap[ii - 1] === 3 && bCellX[ii - 1] !== bCellX[ii]) ||
+            (y > 0 && kindMap[ii - cols] === 3 && bCellY[ii - cols] !== bCellY[ii]));
           if (byPave && byHouse && seed % 9 === 0) line.push(TILE.drive);
-          else if (byPave && !parkMap[ii] && seed % 5 !== 0) line.push(TILE.hedge);
+          else if (byPave && garden && seed % 5 !== 0) line.push(TILE.hedge);
           else if (plotEdge && seed % 6 !== 0) line.push(TILE.hedge);
           else line.push(seed % 23 === 0 ? TILE.grassFlower : TILE.grass);
         } else if (kk === 5) {
           line.push(TILE.water);
+        } else if (kk === 6) {
+          // a made path through a park, a paved one along a street
+          line.push(parkMap[ii] ? TILE.dirt : (seed % 4 === 0 ? TILE.paveB : TILE.pave));
         } else if (kk === 4) {
           var me = bId[ii];
           var same = function (gx2, gy2) {
@@ -863,8 +1025,11 @@
           var rb = TILE.roofBase + roofCol[ii] * TILE.roofStride;
           line.push(!bN ? rb + 1 : (!bS ? rb + 2 : (!bW ? rb + 3 : (!bE ? rb + 4 : rb))));
         } else {
+          // Land past the gardens. Between houses that is still somebody's
+          // grass; out beyond the last street it can go to scrub.
           var bl = seededRandom(seed % 7919);
-          line.push(bl < 0.55 ? TILE.waste : (bl < 0.72 ? TILE.dirt : TILE.grass));
+          if (isResidential(x, y)) line.push(bl < 0.12 ? TILE.waste : TILE.grass);
+          else line.push(bl < 0.55 ? TILE.waste : (bl < 0.72 ? TILE.dirt : TILE.grass));
         }
       }
       data.push(line);
@@ -978,6 +1143,7 @@
     world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen,
               trees: trees, props: props, shadow: shadow,
               toM: toM, widthM: widthM, heightM: heightM };
+    window.__world = world;
     return world;
   }
 
@@ -1409,9 +1575,36 @@
     });
   }
 
+  // Map data per walk, keyed on its bounding box, so stepping back to a walk
+  // you have already watched does not go back to Overpass for it.
+  var osmCache = {};
+  function boundsKey(b) {
+    return [b.minLat, b.minLng, b.maxLat, b.maxLng]
+      .map(function (v) { return v.toFixed(5); }).join(",");
+  }
+
+  // Move the world to this walk's patch of the map, if it is not there already.
+  function focusWorldOn(walk) {
+    var b = boundsForWalk(walk);
+    if (sameBounds(b, state.bounds) && state.osmWays) return;
+    state.bounds = b;
+    var key = boundsKey(b);
+    state.osmWays = osmCache[key] || null;
+    if (scene) scene.buildLevel();
+    if (state.osmWays) return;
+    overpass(areaQuery(b)).then(function (ways) {
+      if (!ways || !ways.length) { toast("Map data unavailable — showing plain ground"); return; }
+      osmCache[key] = ways;
+      if (!sameBounds(b, state.bounds)) return;   // user moved on while it loaded
+      state.osmWays = ways;
+      if (scene) scene.buildLevel();
+    });
+  }
+
   function startWalk(i) {
     var walk = state.walks[i];
     if (!walk || walk.length < 2) return;
+    focusWorldOn(walk);
     pb.walk = walk; pb.index = i; pb.playing = true; pb.elapsed = 0;
     // Deliberately slow: a 20-minute walk plays over roughly four minutes,
     // about a fifth of real time, so the dog ambles rather than darts. The
@@ -1489,9 +1682,12 @@
 
   // Refetch the map around whatever data is now loaded, then rebuild the level.
   function rebuildFromData() {
+    var b = state.bounds;
     if (scene) scene.buildLevel();
-    overpass(areaQuery(state.bounds)).then(function (ways) {
+    overpass(areaQuery(b)).then(function (ways) {
       if (!ways || !ways.length) { toast("Map data unavailable — showing plain ground"); return; }
+      osmCache[boundsKey(b)] = ways;
+      if (!sameBounds(b, state.bounds)) return;
       state.osmWays = ways;
       if (scene) scene.buildLevel();
     });

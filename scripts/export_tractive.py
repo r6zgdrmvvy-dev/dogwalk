@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Export walk/position history from a Tractive GPS tracker into the
-{"lat", "lng", "t"} JSON shape used by guinness-walk-game.html.
+{"lat", "lng", "t"} JSON shape the game reads.
 
 Tractive has no official public API. This uses the reverse-engineered
 `aiotractive` client (https://github.com/zhulik/aiotractive) and talks to
@@ -20,7 +20,7 @@ Install:
 
 Usage:
     python scripts/export_tractive.py --days 14
-    python scripts/export_tractive.py --days 30 --output guinness_walk.json
+    python scripts/export_tractive.py --days 30 --output walks.json
     python scripts/export_tractive.py --tracker-id abc123 --raw
 
 Credentials are read from (in order): --email/--password flags, then the
@@ -58,7 +58,7 @@ def parse_args():
     p.add_argument("--tracker-id", help="Specific tracker ID to export. If omitted and there's only one tracker on the account, it's used automatically.")
     p.add_argument("--days", type=int, default=30, help="How many days of history to pull (default: 30)")
     p.add_argument("--chunk-days", type=int, default=7, help="Request the history in windows of this many days at a time (default: 7)")
-    p.add_argument("--output", default="guinness_walk.json", help="Output JSON file (default: guinness_walk.json)")
+    p.add_argument("--output", default="walks.json", help="Output JSON file (default: walks.json)")
     p.add_argument("--raw", action="store_true", help="Also dump the untouched API responses to <output>.raw.json for inspection")
     p.add_argument("--clipboard", action="store_true", help="Copy the resulting JSON to the clipboard (requires pyperclip)")
     return p.parse_args()

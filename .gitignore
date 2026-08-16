@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 *.raw.json
 guinness_walk.json
+walks.json
