@@ -326,14 +326,21 @@
     return attempt(0);
   }
 
+  var WORLD_MARGIN_M = 140;      // ground drawn beyond the walked area
+
   function areaQuery(b) {
-    var bbox = b.minLat + "," + b.minLng + "," + b.maxLat + "," + b.maxLng;
+    // pad the request, otherwise the map ends exactly where the dog turned
+    var dLat = WORLD_MARGIN_M / 111320;
+    var dLng = WORLD_MARGIN_M / (111320 * Math.cos(b.minLat * Math.PI / 180));
+    var bbox = (b.minLat - dLat) + "," + (b.minLng - dLng) + "," +
+               (b.maxLat + dLat) + "," + (b.maxLng + dLng);
     return "[out:json][timeout:20];(" +
       'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|footway|path)$"](' + bbox + ');' +
       'way["natural"="water"](' + bbox + ');' +
       'way["landuse"~"^(forest|grass|meadow|recreation_ground|residential)$"](' + bbox + ');' +
       'way["natural"="wood"](' + bbox + ');' +
       'way["leisure"~"^(park|golf_course|nature_reserve)$"](' + bbox + ');' +
+      'way["building"](' + bbox + ');' +
       ");out geom;";
   }
 
@@ -476,16 +483,18 @@
   function buildWorld() {
     var b = state.bounds;
     var mPerDegLng = 111320 * Math.cos(b.minLat * Math.PI / 180);
-    var widthM = (b.maxLng - b.minLng) * mPerDegLng;
-    var heightM = (b.maxLat - b.minLat) * 111320;
+    var widthM = (b.maxLng - b.minLng) * mPerDegLng + WORLD_MARGIN_M * 2;
+    var heightM = (b.maxLat - b.minLat) * 111320 + WORLD_MARGIN_M * 2;
 
     // Tile size adapts so a long walk doesn't blow past MAX_TILES.
     var mpt = Math.max(2, Math.sqrt((widthM * heightM) / MAX_TILES));
     var cols = Math.max(8, Math.ceil(widthM / mpt));
     var rows = Math.max(8, Math.ceil(heightM / mpt));
 
+    // world origin sits WORLD_MARGIN_M outside the walk box on every side
     function toM(lat, lng) {
-      return { x: (lng - b.minLng) * mPerDegLng, y: (b.maxLat - lat) * 111320 };
+      return { x: (lng - b.minLng) * mPerDegLng + WORLD_MARGIN_M,
+               y: (b.maxLat - lat) * 111320 + WORLD_MARGIN_M };
     }
 
     // road segments in metres
@@ -505,7 +514,8 @@
         }
       } else {
         var kind = null;
-        if (t.natural === "water") kind = "water";
+        if (t.building) kind = "building";
+        else if (t.natural === "water") kind = "water";
         else if (t.landuse === "forest" || t.natural === "wood" || t.leisure === "nature_reserve") kind = "wood";
         else if (t.leisure === "park" || t.landuse === "grass" || t.landuse === "meadow" ||
                  t.landuse === "recreation_ground" || t.leisure === "golf_course") kind = "park";
@@ -580,7 +590,8 @@
         else {
           var park = false;
           for (var ai = 0; ai < areas.length; ai++) {
-            if (areas[ai].kind !== "water" && inArea(areas[ai], mx, my)) { park = true; break; }
+            var ak = areas[ai].kind;
+            if (ak !== "water" && ak !== "building" && inArea(areas[ai], mx, my)) { park = true; break; }
           }
           // City blocks fill the land fronting the streets; beyond that it
           // is scrub. This is what makes it read as a city rather than
@@ -599,6 +610,33 @@
         bCellX[i] = Math.floor(mx / 9);
         bCellY[i] = Math.floor(my / 9);
         visIdx[i] = Math.floor(mx / VIS) + "," + Math.floor(my / VIS);
+      }
+    }
+
+    // Real building footprints, straight from OSM. Each polygon only tests
+    // the tiles inside its own bounding box, so this stays cheap even with
+    // a few thousand buildings.
+    var footprint = new Int32Array(cols * rows).fill(-1);
+    var nBuildings = 0;
+    areas.forEach(function (a, ai2) {
+      if (a.kind !== "building") return;
+      nBuildings++;
+      var tx0 = Math.max(0, Math.floor(a.minX / mpt)), tx1 = Math.min(cols - 1, Math.ceil(a.maxX / mpt));
+      var ty0 = Math.max(0, Math.floor(a.minY / mpt)), ty1 = Math.min(rows - 1, Math.ceil(a.maxY / mpt));
+      for (var byy = ty0; byy <= ty1; byy++) {
+        for (var bxx = tx0; bxx <= tx1; bxx++) {
+          var cxm = (bxx + 0.5) * mpt, cym = (byy + 0.5) * mpt;
+          if (inArea(a, cxm, cym)) footprint[byy * cols + bxx] = ai2;
+        }
+      }
+    });
+
+    // Where OSM has real footprints, use them; otherwise fall back to the
+    // procedural frontage so sparsely-mapped areas still read as streets.
+    if (nBuildings > 12) {
+      for (var fi = 0; fi < cols * rows; fi++) {
+        if (kindMap[fi] === 1 || kindMap[fi] === 2) continue;
+        kindMap[fi] = footprint[fi] >= 0 ? 4 : (kindMap[fi] === 4 ? 3 : kindMap[fi]);
       }
     }
 
@@ -621,11 +659,14 @@
         } else if (kk === 3) {
           line.push(TILE.grass);
         } else if (kk === 4) {
-          var bid = Math.abs((bCellX[ii] * 92837) ^ (bCellY[ii] * 689287));
+          var fp = footprint[ii];
+          var bid = fp >= 0 ? Math.abs(fp * 2654435761)
+                            : Math.abs((bCellX[ii] * 92837) ^ (bCellY[ii] * 689287));
           var pair = TILE.roofPairs[bid % TILE.roofPairs.length];
           var sameCell = function (j) {
-            return j >= 0 && j < cols * rows && kindMap[j] === 4 &&
-                   bCellX[j] === bCellX[ii] && bCellY[j] === bCellY[ii];
+            if (j < 0 || j >= cols * rows || kindMap[j] !== 4) return false;
+            if (fp >= 0 || footprint[j] >= 0) return footprint[j] === fp;
+            return bCellX[j] === bCellX[ii] && bCellY[j] === bCellY[ii];
           };
           var edge = !(x > 0 && sameCell(ii - 1)) || !(x < cols - 1 && sameCell(ii + 1)) ||
                      !(y > 0 && sameCell(ii - cols)) || !(y < rows - 1 && sameCell(ii + cols));
