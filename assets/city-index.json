@@ -1,0 +1,57 @@
+{
+  "_cols": 8,
+  "_count": 58,
+  "_size": 16,
+  "dashH": 3,
+  "dashV": 4,
+  "dirt": 20,
+  "drain": 2,
+  "drive": 11,
+  "grass": 16,
+  "grassFlower": 17,
+  "hedge": 19,
+  "kerbE": 15,
+  "kerbN": 12,
+  "kerbS": 13,
+  "kerbW": 14,
+  "pave": 9,
+  "paveB": 10,
+  "props": {
+    "bench": 11,
+    "bin": 9,
+    "carEW": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "carNS": [
+      4,
+      5,
+      6,
+      7
+    ],
+    "lamp": 8,
+    "postbox": 10
+  },
+  "roofBase": 26,
+  "roofCount": 4,
+  "roofStride": 5,
+  "scrub": 18,
+  "tarmac": 0,
+  "tarmacB": 1,
+  "trees": [
+    22,
+    23,
+    24,
+    25
+  ],
+  "wallBase": 46,
+  "wallCount": 4,
+  "wallStride": 3,
+  "water": 21,
+  "yellowH": 5,
+  "yellowV": 6,
+  "zebraH": 7,
+  "zebraV": 8
+}

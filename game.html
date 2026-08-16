@@ -462,21 +462,36 @@
 
   var TS = 16;              // tileset tile size, px
   var TS_COLS = 8;
-  var MAX_TILES = 160000;   // keeps the Phaser tilemap to a sane object count
+  var MAX_TILES = 260000;   // keeps the Phaser tilemap to a sane object count
 
   // Generated city tileset (assets/city.png). Pure top-down, GTA-London
   // grubby: soot tarmac, concrete pavement, brick and lead rooftops.
+  // Indices match assets/city-index.json, emitted by scripts/make_tiles.py.
   var TILE = {
-    asphalt: 0, dashH: 1, dashV: 2, drain: 3,
-    pave: 4, kerb: 5,
-    grass: 6, waste: 7,
-    trees: [8, 9],
+    asphalt: 0, asphaltB: 1, drain: 2,
+    dashH: 3, dashV: 4,
+    yellowH: 5, yellowV: 6,       // double yellows, hugging the kerb
+    zebraH: 7, zebraV: 8,
+    pave: 9, paveB: 10, drive: 11,
+    // Kerbs are directional: the tarmac side of the tile faces the road.
+    kerbN: 12, kerbS: 13, kerbW: 14, kerbE: 15,
+    grass: 16, grassFlower: 17, waste: 18, hedge: 19, dirt: 20, water: 21,
+    trees: [22, 23, 24, 25],
     // Each roof colour is five tiles: interior, then a gutter edge facing
     // north / south / west / east, so a roofline reads as a roofline.
-    roofBase: 10, roofStride: 5, roofCount: 4,
-    // Front elevations, two per roof colour (window / door). Drawn on the
-    // tile below a building so roofs sit on something.
-    wallBase: 30, wallStride: 2
+    roofBase: 26, roofStride: 5, roofCount: 4,
+    // Front elevations, three per wall colour (window / bay window / door).
+    // Drawn on the tile below a building so roofs sit on something.
+    wallBase: 46, wallStride: 3, wallCount: 4
+  };
+
+  // Street furniture (assets/props.png). Authored on 32px frames -- two tiles
+  // across -- so a car is about 4m long at native scale, with its pixels still
+  // landing exactly on the ground's pixel grid.
+  var PS = 32;
+  var PROP = {
+    carEW: [0, 1, 2, 3], carNS: [4, 5, 6, 7],
+    lamp: 8, bin: 9, postbox: 10, bench: 11
   };
 
   var world = null;
@@ -538,11 +553,16 @@
         var minor = t.highway === "footway" || t.highway === "path" || t.highway === "cycleway";
         var residential = t.highway === "residential" || t.highway === "living_street" ||
           t.highway === "unclassified" || t.highway === "tertiary";
+        // A-roads and B-roads: wide enough for markings, and they get them.
+        var major = t.highway === "primary" || t.highway === "secondary" ||
+          t.highway === "trunk" || t.highway === "primary_link" ||
+          t.highway === "secondary_link" || t.highway === "trunk_link";
         for (var i = 0; i < w.geometry.length - 1; i++) {
           var p0 = toM(w.geometry[i].lat, w.geometry[i].lon);
           var p1 = toM(w.geometry[i + 1].lat, w.geometry[i + 1].lon);
           segs.push({ ax: p0.x, ay: p0.y, bx: p1.x, by: p1.y,
-                      half: minor ? 1.2 : 3.0, residential: residential });
+                      half: minor ? 1.2 : (major ? 5.0 : 3.0),
+                      major: major, minor: minor, residential: residential });
         }
       } else {
         var kind = null;
@@ -585,7 +605,8 @@
 
     var ROAD_HALF = 4.0, PAVE = 2.4, BLOCK_DEPTH = 34;
 
-    var kindMap = new Uint8Array(cols * rows);   // 0 open, 1 road, 2 pave, 3 park, 4 building
+    var kindMap = new Uint8Array(cols * rows);   // 0 open, 1 road, 2 pave, 3 park, 4 building, 5 water
+    var parkMap = new Uint8Array(cols * rows);   // green that is public, not a back garden
     var majorMap = new Uint8Array(cols * rows);
     var alongH = new Uint8Array(cols * rows);
     var bCellX = new Int32Array(cols * rows);
@@ -596,12 +617,19 @@
     // drawn over a 28x16 grid, which at street scale meant slabs of darkness
     // the size of whole neighbourhoods.
     var VIS = 14;
+    // Two rings, not one: the outer ring is drawn half-lit so the edge of what
+    // the dog has seen fades out instead of ending on a hard rectangle.
     var visited = {};
     state.points.forEach(function (pt) {
       var m = toM(pt.lat, pt.lng);
       var cx = Math.floor(m.x / VIS), cy = Math.floor(m.y / VIS);
-      for (var ox = -1; ox <= 1; ox++)
-        for (var oy = -1; oy <= 1; oy++) visited[(cx + ox) + "," + (cy + oy)] = 1;
+      for (var ox = -2; ox <= 2; ox++) {
+        for (var oy = -2; oy <= 2; oy++) {
+          var lvl = (Math.abs(ox) <= 1 && Math.abs(oy) <= 1) ? 2 : 1;
+          var kk2 = (cx + ox) + "," + (cy + oy);
+          if ((visited[kk2] || 0) < lvl) visited[kk2] = lvl;
+        }
+      }
     });
 
     for (var ty = 0; ty < rows; ty++) {
@@ -616,31 +644,44 @@
           if (d < best) { best = d; bestSeg = sg; }
         }
         var i = ty * cols + tx, kind;
-        var half = bestSeg ? bestSeg.half + 1.6 : 0;
+        // Carriageway and pavement are floored at a tile and a bit each, so a
+        // street still reads as a street when the world is coarse.
+        var half = bestSeg ? Math.max(bestSeg.half + 0.8, mpt * 1.05) : 0;
+        // A pavement narrower than about a tile and a half rounds in and out
+        // of existence along the street and reads as scattered slabs.
+        var paveW = Math.max(PAVE, mpt * 1.45);
         if (bestSeg && best < half) kind = 1;
-        else if (bestSeg && best < half + PAVE) kind = 2;
+        else if (bestSeg && best < half + paveW) kind = 2;
         else {
-          var park = false;
+          var park = false, wet = false;
           for (var ai = 0; ai < areas.length; ai++) {
             var ak = areas[ai].kind;
-            if (ak !== "water" && ak !== "building" && inArea(areas[ai], mx, my)) { park = true; break; }
+            if (ak === "building") continue;
+            if (!inArea(areas[ai], mx, my)) continue;
+            if (ak === "water") { wet = true; break; }
+            park = true;
           }
           // City blocks fill the land fronting the streets; beyond that it
           // is scrub. This is what makes it read as a city rather than
           // buildings scattered on a field.
-          var frontage = half + PAVE;
-          if (park) kind = 3;
-          else if (best < frontage + 13) kind = 4;        // the house itself
-          else if (best < frontage + 30) kind = 3;        // its garden
-          else kind = 0;                                   // back land / scrub
+          // Houses sit back behind a front garden rather than straight onto
+          // the pavement — that gap is most of what makes a street British.
+          var frontage = half + paveW;
+          var setback = Math.max(3.5, mpt * 1.1);
+          if (wet) kind = 5;
+          else if (park) { kind = 3; parkMap[i] = 1; }
+          else if (best < frontage + setback) kind = 3;              // front garden
+          else if (best < frontage + setback + 17) kind = 4;         // the house itself
+          else if (best < frontage + setback + 26) kind = 3;         // back garden
+          else kind = 0;                                             // back land / scrub
         }
         kindMap[i] = kind;
         if (bestSeg && bestSeg.major) majorMap[i] = 1;
         if (bestSeg) alongH[i] = Math.abs(bestSeg.bx - bestSeg.ax) >= Math.abs(bestSeg.by - bestSeg.ay) ? 1 : 0;
-        // which ~9m building footprint this tile belongs to, so a block
-        // reads as a terrace of separate houses instead of one flat mass
-        bCellX[i] = Math.floor(mx / 9);
-        bCellY[i] = Math.floor(my / 9);
+        // which ~14m building plot this tile belongs to, so a block reads as
+        // a row of separate houses instead of one flat mass
+        bCellX[i] = Math.floor(mx / 14);
+        bCellY[i] = Math.floor(my / 14);
         visIdx[i] = Math.floor(mx / VIS) + "," + Math.floor(my / VIS);
       }
     }
@@ -667,8 +708,35 @@
     // procedural frontage so sparsely-mapped areas still read as streets.
     if (nBuildings > 12) {
       for (var fi = 0; fi < cols * rows; fi++) {
-        if (kindMap[fi] === 1 || kindMap[fi] === 2) continue;
+        if (kindMap[fi] === 1 || kindMap[fi] === 2 || kindMap[fi] === 5) continue;
         kindMap[fi] = footprint[fi] >= 0 ? 4 : (kindMap[fi] === 4 ? 3 : kindMap[fi]);
+      }
+    }
+
+    // One id per building, so neighbouring houses can be told apart.
+    var bId = new Int32Array(cols * rows).fill(-1);
+    for (var bi2 = 0; bi2 < cols * rows; bi2++) {
+      if (kindMap[bi2] !== 4) continue;
+      bId[bi2] = footprint[bi2] >= 0
+        ? footprint[bi2]
+        : (1e7 + (bCellX[bi2] * 4093 + bCellY[bi2]));
+    }
+
+    // Pull the houses apart. Without this every street is lined by one
+    // unbroken ribbon of roof: at a few metres per tile, the real gaps between
+    // semi-detached villas are thinner than a tile and vanish. Clearing the
+    // tile on each side of an id boundary puts the close back in.
+    var bIdSrc = bId.slice();
+    for (var gy = 0; gy < rows; gy++) {
+      for (var gx = 0; gx < cols; gx++) {
+        var gi = gy * cols + gx;
+        if (bIdSrc[gi] < 0) continue;
+        var split = false;
+        if (gx > 0 && bIdSrc[gi - 1] >= 0 && bIdSrc[gi - 1] !== bIdSrc[gi]) split = true;
+        if (!split && gx < cols - 1 && bIdSrc[gi + 1] >= 0 && bIdSrc[gi + 1] !== bIdSrc[gi]) split = true;
+        if (!split && gy > 0 && bIdSrc[gi - cols] >= 0 && bIdSrc[gi - cols] !== bIdSrc[gi]) split = true;
+        if (!split && gy < rows - 1 && bIdSrc[gi + cols] >= 0 && bIdSrc[gi + cols] !== bIdSrc[gi]) split = true;
+        if (split) { kindMap[gi] = 3; bId[gi] = -1; }
       }
     }
 
@@ -677,10 +745,9 @@
     var roofCol = new Int8Array(cols * rows).fill(-1);
     for (var rc = 0; rc < cols * rows; rc++) {
       if (kindMap[rc] !== 4) continue;
-      var fpc = footprint[rc];
-      var bidc = fpc >= 0 ? Math.abs(fpc * 2654435761)
-                          : Math.abs((bCellX[rc] * 92837) ^ (bCellY[rc] * 689287));
-      roofCol[rc] = bidc % TILE.roofCount;
+      // imul, not `*`: the ids run past 2^32 and a plain multiply loses the
+      // low bits to float precision, which collapses every roof to one colour.
+      roofCol[rc] = (Math.imul(bId[rc], 2654435761) >>> 8) % TILE.roofCount;
     }
     var wallMask = new Int8Array(cols * rows).fill(-1);
     for (var wy2 = 1; wy2 < rows; wy2++) {
@@ -688,6 +755,37 @@
         var wi = wy2 * cols + wx2;
         if (kindMap[wi] === 4) continue;
         if (kindMap[wi - cols] === 4) wallMask[wi] = roofCol[wi - cols];
+      }
+    }
+
+    // Junctions, so crossings and give-way markings land where they belong.
+    // A road tile is a junction when its neighbours disagree about which way
+    // the road runs. Distance is then flooded outward a few tiles.
+    var junc = new Int8Array(cols * rows).fill(-1);
+    var jq = [];
+    for (var jy = 1; jy < rows - 1; jy++) {
+      for (var jx = 1; jx < cols - 1; jx++) {
+        var ji = jy * cols + jx;
+        if (kindMap[ji] !== 1) continue;
+        var differs = false;
+        for (var oy2 = -1; oy2 <= 1 && !differs; oy2++)
+          for (var ox2 = -1; ox2 <= 1; ox2++) {
+            var nj = ji + oy2 * cols + ox2;
+            if (kindMap[nj] === 1 && alongH[nj] !== alongH[ji]) { differs = true; break; }
+          }
+        if (differs) { junc[ji] = 0; jq.push(ji); }
+      }
+    }
+    for (var jh = 0; jh < jq.length; jh++) {
+      var jc = jq[jh];
+      if (junc[jc] >= 5) continue;
+      var jn = [jc - 1, jc + 1, jc - cols, jc + cols];
+      for (var jk = 0; jk < 4; jk++) {
+        var jni = jn[jk];
+        if (jni < 0 || jni >= cols * rows) continue;
+        if (kindMap[jni] !== 1 || junc[jni] >= 0) continue;
+        junc[jni] = junc[jc] + 1;
+        jq.push(jni);
       }
     }
 
@@ -699,37 +797,74 @@
         var ii = y * cols + x, kk = kindMap[ii];
         var seed = Math.abs((x * 73856093) ^ (y * 19349663));
         if (wallMask[ii] >= 0) {
-          line.push(TILE.wallBase + wallMask[ii] * TILE.wallStride + (seed % 3 === 0 ? 1 : 0));
+          // window / bay / door — doors are rare, bays common on suburban fronts
+          var wv = seed % 11 === 0 ? 2 : (seed % 3 === 0 ? 1 : 0);
+          line.push(TILE.wallBase + wallMask[ii] * TILE.wallStride + wv);
           continue;
         }
         if (kk === 1) {
+          var roadH = alongH[ii];
+          // Zebra crossing on the approach to a junction on a bigger road.
+          // The stripes run with the traffic, so a horizontal road wants the
+          // horizontally-barred tile.
+          if (majorMap[ii] && junc[ii] >= 3 && junc[ii] <= 4) {
+            line.push(roadH ? TILE.zebraV : TILE.zebraH);
+            continue;
+          }
+          // Double yellows hug the kerb: a road tile with pavement beside it.
+          var kerbSide =
+            (roadH && ((y > 0 && kindMap[ii - cols] === 2) || (y < rows - 1 && kindMap[ii + cols] === 2))) ||
+            (!roadH && ((x > 0 && kindMap[ii - 1] === 2) || (x < cols - 1 && kindMap[ii + 1] === 2)));
+          if (kerbSide && majorMap[ii] && seed % 3 !== 0) {
+            line.push(roadH ? TILE.yellowH : TILE.yellowV);
+            continue;
+          }
           // centre line only down the middle of the bigger roads
           var mid = majorMap[ii] && (seed % 5 === 0);
-          line.push(mid ? (alongH[ii] ? TILE.dashH : TILE.dashV)
-                        : (seed % 53 === 0 ? TILE.drain : TILE.asphalt));
+          line.push(mid ? (roadH ? TILE.dashH : TILE.dashV)
+                        : (seed % 53 === 0 ? TILE.drain
+                           : (seed % 7 === 0 ? TILE.asphaltB : TILE.asphalt)));
         } else if (kk === 2) {
-          var nextToRoad =
-            (x > 0 && kindMap[ii - 1] === 1) || (x < cols - 1 && kindMap[ii + 1] === 1) ||
-            (y > 0 && kindMap[ii - cols] === 1) || (y < rows - 1 && kindMap[ii + cols] === 1);
-          line.push(nextToRoad ? TILE.kerb : TILE.pave);
+          // Directional kerb: the tarmac edge of the tile faces the road.
+          if (y > 0 && kindMap[ii - cols] === 1) line.push(TILE.kerbN);
+          else if (y < rows - 1 && kindMap[ii + cols] === 1) line.push(TILE.kerbS);
+          else if (x > 0 && kindMap[ii - 1] === 1) line.push(TILE.kerbW);
+          else if (x < cols - 1 && kindMap[ii + 1] === 1) line.push(TILE.kerbE);
+          else line.push(seed % 4 === 0 ? TILE.paveB : TILE.pave);
         } else if (kk === 3) {
-          line.push(TILE.grass);
+          // Front gardens: privet hedge along the pavement, the odd driveway
+          // running back to the house, wildflowers in the grass elsewhere.
+          var byPave =
+            (x > 0 && kindMap[ii - 1] === 2) || (x < cols - 1 && kindMap[ii + 1] === 2) ||
+            (y > 0 && kindMap[ii - cols] === 2) || (y < rows - 1 && kindMap[ii + cols] === 2);
+          var byHouse =
+            (x > 0 && kindMap[ii - 1] === 4) || (x < cols - 1 && kindMap[ii + 1] === 4) ||
+            (y > 0 && kindMap[ii - cols] === 4) || (y < rows - 1 && kindMap[ii + cols] === 4);
+          // Boundary hedges between neighbouring plots. Without these the
+          // gardens merge into one green field and the street stops reading
+          // as a row of separate homes.
+          var plotEdge = !parkMap[ii] && (
+            (x > 0 && kindMap[ii - 1] === 3 && !parkMap[ii - 1] && bCellX[ii - 1] !== bCellX[ii]) ||
+            (y > 0 && kindMap[ii - cols] === 3 && !parkMap[ii - cols] && bCellY[ii - cols] !== bCellY[ii]));
+          if (byPave && byHouse && seed % 9 === 0) line.push(TILE.drive);
+          else if (byPave && !parkMap[ii] && seed % 5 !== 0) line.push(TILE.hedge);
+          else if (plotEdge && seed % 6 !== 0) line.push(TILE.hedge);
+          else line.push(seed % 23 === 0 ? TILE.grassFlower : TILE.grass);
+        } else if (kk === 5) {
+          line.push(TILE.water);
         } else if (kk === 4) {
-          var fp = footprint[ii];
-          var bid = fp >= 0 ? Math.abs(fp * 2654435761)
-                            : Math.abs((bCellX[ii] * 92837) ^ (bCellY[ii] * 689287));
-          var sameCell = function (j, gx2, gy2) {
+          var me = bId[ii];
+          var same = function (gx2, gy2) {
             if (gx2 < 0 || gx2 >= cols || gy2 < 0 || gy2 >= rows) return false;
-            if (kindMap[j] !== 4) return false;
-            if (fp >= 0 || footprint[j] >= 0) return footprint[j] === fp;
-            return bCellX[j] === bCellX[ii] && bCellY[j] === bCellY[ii];
+            return bId[gy2 * cols + gx2] === me;
           };
-          var bN = sameCell(ii - cols, x, y - 1), bS = sameCell(ii + cols, x, y + 1);
-          var bW = sameCell(ii - 1, x - 1, y),    bE = sameCell(ii + 1, x + 1, y);
-          var rb = TILE.roofBase + (bid % TILE.roofCount) * TILE.roofStride;
+          var bN = same(x, y - 1), bS = same(x, y + 1);
+          var bW = same(x - 1, y), bE = same(x + 1, y);
+          var rb = TILE.roofBase + roofCol[ii] * TILE.roofStride;
           line.push(!bN ? rb + 1 : (!bS ? rb + 2 : (!bW ? rb + 3 : (!bE ? rb + 4 : rb))));
         } else {
-          line.push(seededRandom(seed % 7919) < 0.7 ? TILE.waste : TILE.grass);
+          var bl = seededRandom(seed % 7919);
+          line.push(bl < 0.55 ? TILE.waste : (bl < 0.72 ? TILE.dirt : TILE.grass));
         }
       }
       data.push(line);
@@ -788,16 +923,60 @@
         var ti = tyy * cols + txx;
         if (kindMap[ti] !== 3) continue;
         var tseed = Math.abs((txx * 31337) ^ (tyy * 6971));
-        if (seededRandom(tseed % 5003) > 0.11) continue;
+        // parks are wooded, gardens have the odd tree
+        if (seededRandom(tseed % 5003) > (parkMap[ti] ? 0.20 : 0.13)) continue;
         trees.push({ x: (txx + 0.5) * mpt, y: (tyy + 0.5) * mpt,
                      t: TILE.trees[tseed % TILE.trees.length] });
       }
     }
 
-    var seen = new Uint8Array(cols * rows);
-    for (var si2 = 0; si2 < cols * rows; si2++) seen[si2] = visited[visIdx[si2]] ? 1 : 0;
+    // Street furniture. Cars parked nose-to-tail along the kerb are what stop
+    // a residential street reading as an empty grey field, and lamp posts give
+    // the pavement a rhythm.
+    var props = [];
+    for (var py = 1; py < rows - 1; py++) {
+      for (var px = 1; px < cols - 1; px++) {
+        var pi2 = py * cols + px, pk = kindMap[pi2];
+        if (pk !== 1 && pk !== 2) continue;
+        var horiz = alongH[pi2];
+        var along = horiz ? px : py;
+        var pseed = Math.abs((px * 40961) ^ (py * 26317));
+        var wx3 = (px + 0.5) * mpt, wy3 = (py + 0.5) * mpt;
 
-    world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen, trees: trees, shadow: shadow,
+        if (pk === 1) {
+          // only the kerbside lane, and never across a junction mouth
+          var kerbside = horiz
+            ? (kindMap[pi2 - cols] === 2 || kindMap[pi2 + cols] === 2)
+            : (kindMap[pi2 - 1] === 2 || kindMap[pi2 + 1] === 2);
+          if (!kerbside || junc[pi2] >= 0) continue;
+          if (along % 3 !== 0 || seededRandom(pseed % 6151) > 0.55) continue;
+          var pal = horiz ? PROP.carEW : PROP.carNS;
+          // a car is about 4.2m, so it has to be scaled up off a 16px tile
+          props.push({ x: wx3, y: wy3, t: pal[pseed % pal.length] });
+        } else {
+          // lamp arms reach out over the carriageway, so the post has to know
+          // which side of it the road is on
+          var rot = null;
+          if (kindMap[pi2 + 1] === 1) rot = 0;
+          else if (kindMap[pi2 - 1] === 1) rot = Math.PI;
+          else if (kindMap[pi2 + cols] === 1) rot = Math.PI / 2;
+          else if (kindMap[pi2 - cols] === 1) rot = -Math.PI / 2;
+          if (rot !== null && along % 9 === 0 && seededRandom(pseed % 4483) < 0.7) {
+            props.push({ x: wx3, y: wy3, t: PROP.lamp, r: rot });
+          } else if (seededRandom(pseed % 3571) < 0.03) {
+            props.push({ x: wx3, y: wy3, t: PROP.bin });
+          } else if (seededRandom(pseed % 2749) < 0.006) {
+            props.push({ x: wx3, y: wy3, t: parkMap[pi2] ? PROP.bench : PROP.postbox });
+          }
+        }
+      }
+    }
+
+    var seen = new Uint8Array(cols * rows);
+    for (var si2 = 0; si2 < cols * rows; si2++) seen[si2] = visited[visIdx[si2]] || 0;
+
+    world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen,
+              trees: trees, props: props, shadow: shadow,
               toM: toM, widthM: widthM, heightM: heightM };
     return world;
   }
@@ -858,6 +1037,7 @@
     preload() {
       var bar = document.querySelector("#bar i");
       this.load.spritesheet("tiles", "assets/city.png", { frameWidth: TS, frameHeight: TS });
+      this.load.spritesheet("props", "assets/props.png", { frameWidth: PS, frameHeight: PS });
       this.load.spritesheet("dog", "assets/dog-topdown.png", { frameWidth: 16, frameHeight: 16 });
       this.load.on("progress", function (v) { bar.style.width = Math.round(v * 100) + "%"; });
     }
@@ -966,6 +1146,7 @@
       if (this.layer) { this.layer.destroy(); this.layer = null; }
       if (this.labelGroup) this.labelGroup.clear(true, true);
       if (this.treeGroup) this.treeGroup.clear(true, true);
+      if (this.propGroup) this.propGroup.clear(true, true);
       if (this.trailGfx) this.trailGfx.clear();
       if (this.treasureGroup) this.treasureGroup.clear(true, true);
 
@@ -977,35 +1158,40 @@
 
       // Tint each tile from two noise fields so the ground reads as mottled
       // turf and worn tarmac rather than one flat colour tiled to infinity.
-      var broad = makeNoise(w.cols, w.rows, 9, 11.3);
-      var fine = makeNoise(w.cols, w.rows, 3, 47.9);
+      // Coarse lattices: variation over tens of metres, not tile to tile. A
+      // tight lattice makes every tile a different shade and the ground reads
+      // as a checkerboard instead of a surface.
+      var broad = makeNoise(w.cols, w.rows, 16, 11.3);
+      var fine = makeNoise(w.cols, w.rows, 6, 47.9);
       this.layer.forEachTile(function (tile) {
         var n = broad(tile.x, tile.y) * 0.72 + fine(tile.x, tile.y) * 0.28;
         var i = tile.index;
-        var tint;
-        if (!w.seen[tile.y * w.cols + tile.x]) {
+        var fog = w.seen[tile.y * w.cols + tile.x];
+        if (fog === 0) {
           // unwalked ground: dimmed in place, at tile resolution
           tile.tint = mixHex(0x2e3440, 0x424a5a, n);
           return;
         }
+        var lit;
         if (w.shadow[tile.y * w.cols + tile.x]) {
-          tile.tint = mixHex(0x6e7382, 0x8e94a4, n);   // in the lee of a building
-          return;
-        }
-        if (i >= TILE.wallBase) {
-          tint = null;                       // elevations carry their own shading
-          tile.tint = mixHex(0xe6e6e6, 0xffffff, n);
-          return;
-        }
-        if (i === TILE.grass || i === TILE.waste) {
-          tile.tint = mixHex(0xa8b49c, 0xffffff, n);        // mottled turf
-        } else if (i === TILE.asphalt || i === TILE.dashH || i === TILE.dashV || i === TILE.drain) {
-          tile.tint = mixHex(0xc8c8cc, 0xffffff, n);        // wet, patched tarmac
-        } else if (i === TILE.pave || i === TILE.kerb) {
-          tile.tint = mixHex(0xd8d6d0, 0xffffff, n);
+          lit = mixHex(0x6e7382, 0x8e94a4, n);          // in the lee of a building
+        } else if (i >= TILE.wallBase) {
+          lit = mixHex(0xe6e6e6, 0xffffff, n);          // elevations self-shade
+        } else if (i === TILE.hedge) {
+          lit = mixHex(0xd0d4c8, 0xf4f8ec, n);          // hedges keep their own depth
+        } else if (i >= TILE.grass && i <= TILE.dirt) {
+          lit = mixHex(0xaab498, 0xdce4cc, n);          // mottled turf, Scottish not tropical
+        } else if (i <= TILE.zebraV) {
+          lit = mixHex(0xd0d2da, 0xeeeef6, n);          // wet, patched tarmac
+        } else if (i <= TILE.kerbE) {
+          lit = mixHex(0xdedcd6, 0xfcfcfa, n);
+        } else if (i === TILE.water) {
+          lit = mixHex(0xd2dcea, 0xffffff, n);
         } else {
-          tile.tint = mixHex(0xdcdcdc, 0xffffff, n * 0.6 + 0.4);   // roofs vary least
+          lit = mixHex(0xdcdcdc, 0xffffff, n * 0.6 + 0.4);   // roofs vary least
         }
+        // half-lit outer ring, so the walked area has a soft edge
+        tile.tint = fog === 2 ? lit : mixHex(mixHex(0x2e3440, 0x424a5a, n), lit, 0.45);
       });
 
       this.treasureGroup = this.treasureGroup || this.add.group();
@@ -1019,6 +1205,20 @@
         if (!w.seen[ty2 * w.cols + tx]) return;
         self.treeGroup.add(self.add.image(tr.x * scale, tr.y * scale, "tiles", tr.t)
           .setOrigin(0.5).setDepth(tr.y * scale));
+      });
+
+      // Street furniture sits below the trees but above the ground, and is
+      // dimmed to match wherever the dog has not been.
+      this.propGroup = this.propGroup || this.add.group();
+      w.props.forEach(function (pr) {
+        var px2 = Math.floor(pr.x / w.mpt), py2 = Math.floor(pr.y / w.mpt);
+        var fog = w.seen[py2 * w.cols + px2];
+        if (!fog) return;
+        var img = self.add.image(pr.x * scale, pr.y * scale, "props", pr.t)
+          .setOrigin(0.5).setDepth(pr.y * scale - 0.5);
+        if (pr.r) img.setRotation(pr.r);
+        if (fog === 1) img.setTint(0x8e94a4);
+        self.propGroup.add(img);
       });
 
       // Street and park names, straight from the OSM name tags. Rotated to
@@ -1382,6 +1582,7 @@
     pipeline: GradeFX ? { GradeFX: GradeFX } : undefined,
     scene: [BootScene, WorldScene]
   });
+  window.game = game;   // debug handle
 
   if (window.matchMedia("(max-width: 720px)").matches) {
     document.getElementById("walks").classList.add("hidden");

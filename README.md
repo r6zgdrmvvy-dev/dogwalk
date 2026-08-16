@@ -60,11 +60,30 @@ actually returned.
   since Tractive only supports raw email/password auth (no OAuth), which
   changes how account credentials would need to be handled.
 
-## Art credit
+## Art
 
-Map tiles are Kenney's [Tiny Town](https://kenney.nl/assets/tiny-town) pack,
-released under Creative Commons Zero (CC0) — free for personal, educational
-and commercial use, with credit appreciated but not required. The full
-licence text is in `ASSETS-LICENSE.txt`. The 132-tile sheet is embedded in
-`dog-walk-game.html` as a data URI so the page stays a single self-contained
-file.
+The tileset is generated, not hand-pixelled by mouse — `scripts/make_tiles.py`
+draws every tile and prop from one palette and writes `assets/city.png`,
+`assets/props.png` and `assets/city-index.json` (the index map `game.html`
+reads its tile numbers from).
+
+```bash
+pip install pillow
+python3 scripts/make_tiles.py
+```
+
+The palette gives each material five values, hue-shifted so shadows drift blue
+and highlights drift warm, and texture comes from ordered dithering between
+neighbouring steps rather than random noise — which is what keeps a small
+palette from going muddy when tiles repeat across a whole town. Light is fixed
+to the north-west everywhere, so every cast shadow falls south-east.
+
+Ground tiles are 16px; props (parked cars, lamp posts, bins, pillar boxes,
+benches) are authored on 32px frames — two tiles across — so a car comes out
+about 4m long at native scale with its pixels still landing exactly on the
+ground's pixel grid. Nothing is drawn at a fractional scale, because that
+would put sprite pixels off the tile grid and break the pixel-art look.
+
+The older `dog-walk-game.html` build still uses Kenney's
+[Tiny Town](https://kenney.nl/assets/tiny-town) pack, released under Creative
+Commons Zero (CC0). Its licence text is in `ASSETS-LICENSE.txt`.
