@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>A Walk With Your Dog</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #f4ead6;
+    --panel: rgba(24, 20, 16, 0.86);
+    --panel-edge: #6b4a30;
+    --accent: #e8a33d;
+    --accent-dark: #b97a22;
+    --good: #7cc23f;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #12100e;
+    font-family: 'Baloo 2', system-ui, sans-serif;
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #game { position: fixed; inset: 0; }
+  #game canvas { display: block; }
+
+  /* ---------- loading ---------- */
+  #boot {
+    position: fixed; inset: 0; z-index: 50;
+    background: #12100e;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; transition: opacity 0.45s ease;
+  }
+  #boot.gone { opacity: 0; pointer-events: none; }
+  #boot h1 { font-size: 30px; margin: 0; letter-spacing: 0.5px; }
+  #boot .sub { opacity: 0.6; font-size: 15px; margin-top: -12px; }
+  #bar { width: 240px; height: 10px; border: 2px solid var(--panel-edge); border-radius: 6px; overflow: hidden; }
+  #bar i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.2s ease; }
+
+  /* ---------- HUD ---------- */
+  .hud { position: fixed; z-index: 20; pointer-events: none; }
+  .hud > * { pointer-events: auto; }
+
+  #hud-top {
+    top: 0; left: 0; right: 0;
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 12px 14px; gap: 12px;
+  }
+
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat {
+    background: var(--panel); border: 2px solid var(--panel-edge);
+    border-radius: 10px; padding: 6px 12px; min-width: 76px; text-align: center;
+    backdrop-filter: blur(3px);
+  }
+  .stat b { display: block; font-size: 19px; color: var(--accent); line-height: 1.1; }
+  .stat span { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
+
+  .btn {
+    background: var(--panel); border: 2px solid var(--panel-edge); color: var(--ink);
+    border-radius: 10px; padding: 7px 13px; font-family: inherit; font-weight: 700;
+    font-size: 14px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent-dark); color: #2a1c0a; }
+
+  #hud-bottom {
+    bottom: 0; left: 0; right: 0;
+    display: flex; align-items: flex-end; justify-content: space-between;
+    padding: 14px; gap: 12px;
+  }
+
+  #walks {
+    background: var(--panel); border: 2px solid var(--panel-edge); border-radius: 12px;
+    padding: 8px; width: 246px; max-height: 46vh; overflow-y: auto;
+    transform: translateX(0); transition: transform 0.25s ease;
+  }
+  #walks.hidden { transform: translateX(calc(-100% - 20px)); }
+  #walks h3 { margin: 2px 4px 8px; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.75; }
+  .walk {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 7px 9px; border-radius: 8px; cursor: pointer; margin-bottom: 4px;
+    background: rgba(255,255,255,0.04);
+  }
+  .walk:hover { background: rgba(232,163,61,0.18); }
+  .walk.active { background: rgba(232,163,61,0.3); }
+  .walk .d { font-size: 13px; font-weight: 700; }
+  .walk .m { font-size: 11px; opacity: 0.65; }
+
+  #transport {
+    background: var(--panel); border: 2px solid var(--panel-edge); border-radius: 12px;
+    padding: 8px 10px; display: flex; align-items: center; gap: 8px; flex: 1; max-width: 560px;
+  }
+  #transport.off { display: none; }
+  #scrub { flex: 1; accent-color: var(--accent); }
+  #clock { font-size: 13px; min-width: 168px; text-align: right; opacity: 0.85; }
+  .speed { display: flex; gap: 3px; }
+  .speed .btn { padding: 5px 8px; font-size: 12px; }
+  .speed .btn.on { background: var(--accent); color: #2a1c0a; border-color: var(--accent-dark); }
+
+  #toast {
+    position: fixed; z-index: 30; left: 50%; top: 74px; transform: translateX(-50%);
+    background: var(--panel); border: 2px solid var(--panel-edge); border-radius: 10px;
+    padding: 8px 16px; font-size: 14px; opacity: 0; transition: opacity 0.3s ease;
+  }
+  #toast.show { opacity: 1; }
+
+  #data-panel {
+    position: fixed; z-index: 40; inset: 0; display: none;
+    background: rgba(8,6,4,0.72); align-items: center; justify-content: center; padding: 20px;
+  }
+  #data-panel.open { display: flex; }
+  #data-panel .card {
+    background: #1c1713; border: 2px solid var(--panel-edge); border-radius: 14px;
+    padding: 18px; width: min(560px, 100%);
+  }
+  #data-panel h2 { margin: 0 0 6px; font-size: 20px; }
+  #data-panel p { margin: 0 0 10px; font-size: 13px; opacity: 0.75; line-height: 1.5; }
+  #data-panel textarea {
+    width: 100%; min-height: 130px; background: #12100e; color: var(--ink);
+    border: 2px solid var(--panel-edge); border-radius: 8px; padding: 9px;
+    font-family: ui-monospace, monospace; font-size: 12px; resize: vertical;
+  }
+  #data-panel .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  #data-msg { font-size: 13px; margin-top: 9px; min-height: 18px; }
+  #data-msg.ok { color: var(--good); }
+  #data-msg.err { color: #e88; }
+  input[type=file] { display: none; }
+
+  @media (max-width: 720px) {
+    #walks { width: 190px; max-height: 34vh; }
+    #clock { display: none; }
+    .stat { min-width: 62px; padding: 5px 9px; }
+    .stat b { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="game"></div>
+
+<div class="hud" id="hud-top">
+  <div class="stats">
+    <div class="stat"><b id="s-dist">0</b><span>km</span></div>
+    <div class="stat"><b id="s-walks">0</b><span>walks</span></div>
+    <div class="stat"><b id="s-explored">0%</b><span>explored</span></div>
+    <div class="stat"><b id="s-treasure">0</b><span>found</span></div>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <button class="btn" id="btn-walks">Walks</button>
+    <button class="btn" id="btn-data">Load data</button>
+  </div>
+</div>
+
+<div class="hud" id="hud-bottom">
+  <div id="walks"><h3>Walks</h3><div id="walk-list"></div></div>
+  <div id="transport" class="off">
+    <button class="btn primary" id="btn-play">Pause</button>
+    <input type="range" id="scrub" min="0" max="1000" value="0">
+    <div class="speed">
+      <button class="btn on" data-speed="1">1×</button>
+      <button class="btn" data-speed="2">2×</button>
+      <button class="btn" data-speed="4">4×</button>
+    </div>
+    <div id="clock"></div>
+    <button class="btn" id="btn-stop">✕</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="data-panel">
+  <div class="card">
+    <h2>Load walk data</h2>
+    <p>Paste GPS points as <code>[{"lat":55.79,"lng":-4.29,"t":"2026-08-10T07:12:00Z"}]</code>,
+       or load a <code>guinness_walk.json</code> exported by <code>scripts/export_tractive.py</code>.</p>
+    <textarea id="json-input" placeholder="Paste walk JSON here…"></textarea>
+    <div class="row">
+      <button class="btn primary" id="btn-load">Load pasted</button>
+      <label class="btn" for="json-file">Load file…</label>
+      <input type="file" id="json-file" accept="application/json,.json">
+      <button class="btn" id="btn-demo">Reset to demo</button>
+      <button class="btn" id="btn-close-data" style="margin-left:auto">Close</button>
+    </div>
+    <div id="data-msg"></div>
+  </div>
+</div>
+
+<div id="boot">
+  <h1>🐾 A Walk With Your Dog</h1>
+  <div class="sub">building the neighbourhood…</div>
+  <div id="bar"><i></i></div>
+</div>
+
+<script src="vendor/phaser.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  // ============================================================
+  //  Walk data
+  // ============================================================
+
+  var GAP_MINUTES = 90;
+  var TREASURE_CHANCE = 0.22;
+  var TREASURES = ["🌰", "🦴", "🍂", "🎾", "🪵", "💭"];
+  var MOCK_CENTER = { lat: 55.7936, lng: -4.2934 };
+
+  var GRID_COLS = 28, GRID_ROWS = 16;   // coarse grid, only for the explored %
+
+  var state = {
+    points: [], walks: [], bounds: null, grid: null,
+    osmWays: null, dogName: "Your Dog"
+  };
+
+  function seededRandom(seed) {
+    var x = Math.sin(seed * 9973 + 12.9898) * 43758.5453;
+    return x - Math.floor(x);
+  }
+
+  function haversineKm(a, b) {
+    var R = 6371;
+    var dLat = (b.lat - a.lat) * Math.PI / 180;
+    var dLng = (b.lng - a.lng) * Math.PI / 180;
+    var l1 = a.lat * Math.PI / 180, l2 = b.lat * Math.PI / 180;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(l1) * Math.cos(l2) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  }
+
+  function splitByGap(points, gapMinutes) {
+    var sorted = points.slice().sort(function (a, b) { return new Date(a.t) - new Date(b.t); });
+    var walks = [], current = [], gapMs = gapMinutes * 60000;
+    sorted.forEach(function (p) {
+      if (!current.length) { current.push(p); return; }
+      if (new Date(p.t) - new Date(current[current.length - 1].t) > gapMs) {
+        walks.push(current); current = [p];
+      } else current.push(p);
+    });
+    if (current.length) walks.push(current);
+    return walks;
+  }
+
+  function computeBounds(points) {
+    var lats = points.map(function (p) { return p.lat; });
+    var lngs = points.map(function (p) { return p.lng; });
+    var minLat = Math.min.apply(null, lats), maxLat = Math.max.apply(null, lats);
+    var minLng = Math.min.apply(null, lngs), maxLng = Math.max.apply(null, lngs);
+    var padLat = Math.max(maxLat - minLat, 0.0012) * 0.08;
+    var padLng = Math.max(maxLng - minLng, 0.0012) * 0.08;
+    return { minLat: minLat - padLat, maxLat: maxLat + padLat,
+             minLng: minLng - padLng, maxLng: maxLng + padLng };
+  }
+
+  function pointToCell(p, b) {
+    var row = Math.floor(((b.maxLat - p.lat) / (b.maxLat - b.minLat)) * GRID_ROWS);
+    var col = Math.floor(((p.lng - b.minLng) / (b.maxLng - b.minLng)) * GRID_COLS);
+    return { row: Math.min(Math.max(row, 0), GRID_ROWS - 1),
+             col: Math.min(Math.max(col, 0), GRID_COLS - 1) };
+  }
+
+  function buildFromPoints(points) {
+    if (!points.length) return;
+    state.points = points.slice().sort(function (a, b) { return new Date(a.t) - new Date(b.t); });
+    state.walks = splitByGap(state.points, GAP_MINUTES);
+    state.bounds = computeBounds(state.points);
+
+    var grid = [];
+    for (var r = 0; r < GRID_ROWS; r++) {
+      var row = [];
+      for (var c = 0; c < GRID_COLS; c++) row.push({ explored: false, treasure: null });
+      grid.push(row);
+    }
+    state.points.forEach(function (p) {
+      var cell = pointToCell(p, state.bounds);
+      grid[cell.row][cell.col].explored = true;
+    });
+    for (var r2 = 0; r2 < GRID_ROWS; r2++) {
+      for (var c2 = 0; c2 < GRID_COLS; c2++) {
+        var g = grid[r2][c2];
+        if (!g.explored) continue;
+        var idx = r2 * GRID_COLS + c2;
+        if (seededRandom(idx * 1.618) < TREASURE_CHANCE) {
+          g.treasure = TREASURES[Math.floor(seededRandom(idx * 2.718 + 1) * TREASURES.length)];
+        }
+      }
+    }
+    state.grid = grid;
+    updateStats();
+  }
+
+  // ---- Overpass ----
+
+  var OVERPASS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter"
+  ];
+
+  function overpass(query) {
+    var attempt = function (i) {
+      if (i >= OVERPASS.length) return Promise.resolve(null);
+      var ctl = new AbortController();
+      var timer = setTimeout(function () { ctl.abort(); }, 12000);
+      return fetch(OVERPASS[i], { method: "POST", body: "data=" + encodeURIComponent(query), signal: ctl.signal })
+        .then(function (r) { clearTimeout(timer); if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (d) { return d.elements || []; })
+        .catch(function () { clearTimeout(timer); return attempt(i + 1); });
+    };
+    return attempt(0);
+  }
+
+  function areaQuery(b) {
+    var bbox = b.minLat + "," + b.minLng + "," + b.maxLat + "," + b.maxLng;
+    return "[out:json][timeout:20];(" +
+      'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|footway|path)$"](' + bbox + ');' +
+      'way["natural"="water"](' + bbox + ');' +
+      'way["landuse"~"^(forest|grass|meadow|recreation_ground|residential)$"](' + bbox + ');' +
+      'way["natural"="wood"](' + bbox + ');' +
+      'way["leisure"~"^(park|golf_course|nature_reserve)$"](' + bbox + ');' +
+      ");out geom;";
+  }
+
+  // ---- demo walks that follow real streets ----
+
+  function walkableQuery(b) {
+    var bbox = (b.lat - 0.011) + "," + (b.lng - 0.018) + "," + (b.lat + 0.011) + "," + (b.lng + 0.018);
+    return "[out:json][timeout:20];(" +
+      'way["highway"~"^(residential|living_street|footway|path|cycleway|pedestrian|unclassified|tertiary)$"]' +
+      '["footway"!="crossing"](' + bbox + ');' +
+      ");out geom;";
+  }
+
+  function buildGraph(ways) {
+    var g = {};
+    var key = function (la, ln) { return la.toFixed(6) + "," + ln.toFixed(6); };
+    ways.forEach(function (w) {
+      if (!w.geometry || w.geometry.length < 2) return;
+      for (var i = 0; i < w.geometry.length - 1; i++) {
+        var a = w.geometry[i], b = w.geometry[i + 1];
+        var ka = key(a.lat, a.lon), kb = key(b.lat, b.lon);
+        if (!g[ka]) g[ka] = { lat: a.lat, lng: a.lon, edges: [] };
+        if (!g[kb]) g[kb] = { lat: b.lat, lng: b.lon, edges: [] };
+        var d = haversineKm({ lat: a.lat, lng: a.lon }, { lat: b.lat, lng: b.lon });
+        if (d <= 0) continue;
+        g[ka].edges.push({ to: kb, dist: d });
+        g[kb].edges.push({ to: ka, dist: d });
+      }
+    });
+    return g;
+  }
+
+  function demoWalksFromGraph(graph) {
+    var best = null, bestD = Infinity;
+    Object.keys(graph).forEach(function (k) {
+      var d = haversineKm(MOCK_CENTER, graph[k]);
+      if (d < bestD) { bestD = d; best = k; }
+    });
+    if (!best) return null;
+
+    var points = [], now = new Date();
+    for (var w = 0; w < 7; w++) {
+      var daysAgo = w * 2 + Math.floor(seededRandom(w * 7.3) * 1.5);
+      var start = new Date(now.getTime() - daysAgo * 86400000);
+      start.setHours(7 + Math.floor(seededRandom(w * 11) * 10), Math.floor(seededRandom(w) * 60), 0, 0);
+      var minutes = 18 + Math.floor(seededRandom(w * 4.2) * 25);
+      var target = minutes * 0.055;
+
+      var path = [graph[best]], cur = best, prev = null, total = 0, steps = 0;
+      while (total < target && steps < 4000) {
+        steps++;
+        var node = graph[cur];
+        if (!node || !node.edges.length) break;
+        var opts = node.edges.filter(function (e) { return e.to !== prev; });
+        if (!opts.length) opts = node.edges;
+        var pickEdge = opts[Math.floor(seededRandom(w * 101 + steps * 7.13) * opts.length)];
+        prev = cur; cur = pickEdge.to; total += pickEdge.dist;
+        path.push(graph[cur]);
+      }
+      if (path.length < 2) continue;
+      var stepMs = (minutes * 60000) / (path.length - 1);
+      path.forEach(function (n, i) {
+        points.push({ lat: n.lat, lng: n.lng, t: new Date(start.getTime() + i * stepMs).toISOString() });
+      });
+    }
+    return points.length ? points : null;
+  }
+
+  function fallbackWalks() {
+    var points = [], now = new Date();
+    for (var w = 0; w < 7; w++) {
+      var start = new Date(now.getTime() - w * 2 * 86400000);
+      start.setHours(8, 0, 0, 0);
+      var n = 70;
+      for (var i = 0; i < n; i++) {
+        var a = (i / n) * Math.PI * 5 + w;
+        var rad = 0.004 + (i / n) * 0.006;
+        points.push({
+          lat: MOCK_CENTER.lat + Math.sin(a) * rad * 0.62,
+          lng: MOCK_CENTER.lng + Math.cos(a) * rad,
+          t: new Date(start.getTime() + i * 25000).toISOString()
+        });
+      }
+    }
+    return points;
+  }
+
+  // ============================================================
+  //  World building — turns OSM geometry into a tile grid
+  // ============================================================
+
+  var TS = 16;              // tileset tile size, px
+  var TS_COLS = 12;
+  var MAX_TILES = 160000;   // keeps the Phaser tilemap to a sane object count
+
+  // Kenney Tiny Town indices
+  var TILE = {
+    grass: [0, 1, 2],
+    dirtC: 25,                              // interior of a dirt area
+    dirtVar: [39, 40, 41, 42],
+    // 3x3 dirt-with-grass-border autotile
+    edge: { nw: 12, n: 13, ne: 14, w: 24, c: 25, e: 26, sw: 36, s: 37, se: 38 },
+    water: 43,
+    // Kenney's broadleaf trees are two tiles stacked: a canopy top and a
+    // canopy-plus-trunk bottom. Drawing only the bottom half is what made
+    // them look like antlers. 28 is a single-tile conifer.
+    trees: [[4, 16], [4, 16], [3, 15], [null, 28]],
+    bush: 5, plants: 17,
+    houses: [
+      { roof: [48, 49, 50], mid: [60, 63, 62], wall: [84, 85, 86] },
+      { roof: [52, 53, 54], mid: [64, 67, 66], wall: [84, 85, 86] },
+      { roof: [48, 49, 50], mid: [60, 63, 62], wall: [88, 89, 90] },
+      { roof: [52, 53, 54], mid: [64, 67, 66], wall: [88, 89, 90] }
+    ]
+  };
+
+  var world = null;
+
+  function segDist(px, py, ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy;
+    var t = L > 0 ? ((px - ax) * dx + (py - ay) * dy) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+
+  function buildWorld() {
+    var b = state.bounds;
+    var mPerDegLng = 111320 * Math.cos(b.minLat * Math.PI / 180);
+    var widthM = (b.maxLng - b.minLng) * mPerDegLng;
+    var heightM = (b.maxLat - b.minLat) * 111320;
+
+    // Tile size adapts so a long walk doesn't blow past MAX_TILES.
+    var mpt = Math.max(2, Math.sqrt((widthM * heightM) / MAX_TILES));
+    var cols = Math.max(8, Math.ceil(widthM / mpt));
+    var rows = Math.max(8, Math.ceil(heightM / mpt));
+
+    function toM(lat, lng) {
+      return { x: (lng - b.minLng) * mPerDegLng, y: (b.maxLat - lat) * 111320 };
+    }
+
+    // road segments in metres
+    var segs = [], areas = [];
+    (state.osmWays || []).forEach(function (w) {
+      if (!w.geometry || w.geometry.length < 2) return;
+      var t = w.tags || {};
+      if (t.highway) {
+        var minor = t.highway === "footway" || t.highway === "path" || t.highway === "cycleway";
+        var residential = t.highway === "residential" || t.highway === "living_street" ||
+          t.highway === "unclassified" || t.highway === "tertiary";
+        for (var i = 0; i < w.geometry.length - 1; i++) {
+          var p0 = toM(w.geometry[i].lat, w.geometry[i].lon);
+          var p1 = toM(w.geometry[i + 1].lat, w.geometry[i + 1].lon);
+          segs.push({ ax: p0.x, ay: p0.y, bx: p1.x, by: p1.y,
+                      half: minor ? 1.2 : 3.0, residential: residential });
+        }
+      } else {
+        var kind = null;
+        if (t.natural === "water") kind = "water";
+        else if (t.landuse === "forest" || t.natural === "wood" || t.leisure === "nature_reserve") kind = "wood";
+        else if (t.leisure === "park" || t.landuse === "grass" || t.landuse === "meadow" ||
+                 t.landuse === "recreation_ground" || t.leisure === "golf_course") kind = "park";
+        if (!kind) return;
+        var pts = w.geometry.map(function (g) { return toM(g.lat, g.lon); });
+        var xs = pts.map(function (p) { return p.x; }), ys = pts.map(function (p) { return p.y; });
+        areas.push({ kind: kind, pts: pts,
+          minX: Math.min.apply(null, xs), maxX: Math.max.apply(null, xs),
+          minY: Math.min.apply(null, ys), maxY: Math.max.apply(null, ys) });
+      }
+    });
+
+    function inArea(a, x, y) {
+      if (x < a.minX || x > a.maxX || y < a.minY || y > a.maxY) return false;
+      var inside = false, p = a.pts;
+      for (var i = 0, j = p.length - 1; i < p.length; j = i++) {
+        if (((p[i].y > y) !== (p[j].y > y)) &&
+            (x < (p[j].x - p[i].x) * (y - p[i].y) / (p[j].y - p[i].y) + p[i].x)) inside = !inside;
+      }
+      return inside;
+    }
+
+    // coarse road buckets so the per-tile distance test stays cheap
+    var BUCKET = 40;
+    var buckets = {};
+    segs.forEach(function (s, i) {
+      var x0 = Math.floor(Math.min(s.ax, s.bx) / BUCKET), x1 = Math.floor(Math.max(s.ax, s.bx) / BUCKET);
+      var y0 = Math.floor(Math.min(s.ay, s.by) / BUCKET), y1 = Math.floor(Math.max(s.ay, s.by) / BUCKET);
+      for (var bx = x0 - 1; bx <= x1 + 1; bx++)
+        for (var by = y0 - 1; by <= y1 + 1; by++) {
+          var k = bx + "," + by;
+          (buckets[k] || (buckets[k] = [])).push(i);
+        }
+    });
+
+    var isRoad = new Uint8Array(cols * rows);
+    var kindMap = new Uint8Array(cols * rows);   // 0 grass, 1 wood, 2 park, 3 water
+    for (var ty = 0; ty < rows; ty++) {
+      for (var tx = 0; tx < cols; tx++) {
+        var mx = (tx + 0.5) * mpt, my = (ty + 0.5) * mpt;
+        var k = Math.floor(mx / BUCKET) + "," + Math.floor(my / BUCKET);
+        var list = buckets[k];
+        var road = false;
+        if (list) {
+          for (var li = 0; li < list.length; li++) {
+            var s = segs[list[li]];
+            if (segDist(mx, my, s.ax, s.ay, s.bx, s.by) < s.half) { road = true; break; }
+          }
+        }
+        isRoad[ty * cols + tx] = road ? 1 : 0;
+        var kk = 0;
+        for (var ai = 0; ai < areas.length; ai++) {
+          if (inArea(areas[ai], mx, my)) {
+            kk = areas[ai].kind === "water" ? 3 : (areas[ai].kind === "wood" ? 1 : 2);
+            if (kk === 3) break;
+          }
+        }
+        kindMap[ty * cols + tx] = kk;
+      }
+    }
+
+    // ---- tile indices, with the dirt edges autotiled ----
+    var data = [];
+    for (var y = 0; y < rows; y++) {
+      var line = [];
+      for (var x = 0; x < cols; x++) {
+        var i = y * cols + x;
+        var seed = Math.abs((x * 73856093) ^ (y * 19349663));
+        if (kindMap[i] === 3 && !isRoad[i]) { line.push(TILE.water); continue; }
+        if (!isRoad[i]) {
+          var g = seededRandom(seed % 7919);
+          line.push(g < 0.8 ? TILE.grass[0] : (g < 0.96 ? TILE.grass[1] : TILE.grass[2]));
+          continue;
+        }
+        // autotile: pick the border piece that matches which neighbours are grass
+        var N = y > 0 && isRoad[(y - 1) * cols + x];
+        var S = y < rows - 1 && isRoad[(y + 1) * cols + x];
+        var W = x > 0 && isRoad[i - 1];
+        var E = x < cols - 1 && isRoad[i + 1];
+        var e = TILE.edge, t;
+        if (!N && !W) t = e.nw; else if (!N && !E) t = e.ne;
+        else if (!S && !W) t = e.sw; else if (!S && !E) t = e.se;
+        else if (!N) t = e.n; else if (!S) t = e.s;
+        else if (!W) t = e.w; else if (!E) t = e.e;
+        else t = seededRandom(seed % 9973) < 0.7 ? e.c : TILE.dirtVar[seed % TILE.dirtVar.length];
+        line.push(t);
+      }
+      data.push(line);
+    }
+
+    // ---- props ----
+    var props = [];
+    var occupied = {};
+    segs.forEach(function (s, si) {
+      var dx = s.bx - s.ax, dy = s.by - s.ay, len = Math.hypot(dx, dy);
+      if (len < 1 || !s.residential) return;
+      var ux = dx / len, uy = dy / len, nx = -uy, ny = ux;
+      for (var d = 0; d < len; d += 15) {
+        var bx = s.ax + ux * d, by = s.ay + uy * d;
+        for (var side = -1; side <= 1; side += 2) {
+          var hx = bx + nx * 10 * side, hy = by + ny * 10 * side;
+          var seed = si * 7919 + Math.round(d * 13) + (side > 0 ? 1 : 0);
+          if (seededRandom(seed) < 0.35) continue;
+          var cellKey = Math.round(hx / 8) + "," + Math.round(hy / 8);
+          if (occupied[cellKey]) continue;
+          occupied[cellKey] = 1;
+          props.push({ kind: "house", x: hx, y: hy, v: Math.floor(seededRandom(seed * 3.1) * 4) % 4 });
+        }
+      }
+    });
+
+    // trees in woodland/park, and a scattering elsewhere
+    for (var ty2 = 0; ty2 < rows; ty2 += 1) {
+      for (var tx2 = 0; tx2 < cols; tx2 += 1) {
+        var ii = ty2 * cols + tx2;
+        if (isRoad[ii] || kindMap[ii] === 3) continue;
+        var sd = Math.abs((tx2 * 31337) ^ (ty2 * 6971));
+        var chance = kindMap[ii] === 1 ? 0.5 : (kindMap[ii] === 2 ? 0.16 : 0.035);
+        var rr = seededRandom(sd % 5003);
+        if (rr > chance) continue;
+        var wx2 = (tx2 + 0.5) * mpt, wy2 = (ty2 + 0.5) * mpt;
+        var ck = Math.round(wx2 / 8) + "," + Math.round(wy2 / 8);
+        if (occupied[ck]) continue;
+        var pair = TILE.trees[sd % TILE.trees.length];
+        props.push({ kind: rr < chance * 0.72 ? "tree" : "bush", x: wx2, y: wy2,
+                     tt: pair[0], tb: pair[1] });
+      }
+    }
+
+    world = { cols: cols, rows: rows, mpt: mpt, data: data, props: props,
+              toM: toM, widthM: widthM, heightM: heightM };
+    return world;
+  }
+
+  // ============================================================
+  //  Phaser
+  // ============================================================
+
+  var game = null, scene = null;
+  var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0 };
+
+  class BootScene extends Phaser.Scene {
+    constructor() { super("boot"); }
+
+    preload() {
+      var bar = document.querySelector("#bar i");
+      this.load.spritesheet("tiles", "assets/tiny-town.png", { frameWidth: TS, frameHeight: TS });
+      this.load.spritesheet("dog", "assets/dog.png", { frameWidth: 16, frameHeight: 16 });
+      this.load.on("progress", function (v) { bar.style.width = Math.round(v * 100) + "%"; });
+    }
+
+    create() { this.scene.start("world"); }
+  }
+
+  class WorldScene extends Phaser.Scene {
+    constructor() { super("world"); }
+
+    create() {
+      scene = this;
+      this.anims.create({
+        key: "trot",
+        frames: this.anims.generateFrameNumbers("dog", { start: 0, end: 3 }),
+        frameRate: 8, repeat: -1
+      });
+      this.anims.create({
+        key: "sit",
+        frames: this.anims.generateFrameNumbers("dog", { start: 0, end: 0 }),
+        frameRate: 1, repeat: -1
+      });
+      this.buildLevel();
+
+      this.input.on("pointermove", function (p) {
+        if (!p.isDown || pb.playing) return;
+        var cam = this.cameras.main;
+        cam.scrollX -= (p.x - p.prevPosition.x) / cam.zoom;
+        cam.scrollY -= (p.y - p.prevPosition.y) / cam.zoom;
+      }, this);
+
+      this.input.on("wheel", function (p, o, dx, dy) {
+        var cam = this.cameras.main;
+        cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.85 : 1.18), 1, 6));
+      }, this);
+
+      hideBoot();
+    }
+
+    // Rebuilt whenever the walk data changes.
+    buildLevel() {
+      if (this.layer) { this.layer.destroy(); this.layer = null; }
+      if (this.propGroup) this.propGroup.clear(true, true);
+      if (this.trailGfx) this.trailGfx.clear();
+      if (this.fogGfx) this.fogGfx.clear();
+      if (this.treasureGroup) this.treasureGroup.clear(true, true);
+
+      var w = buildWorld();
+      var map = this.make.tilemap({ data: w.data, tileWidth: TS, tileHeight: TS });
+      var tileset = map.addTilesetImage("tiles", "tiles", TS, TS, 0, 0);
+      this.layer = map.createLayer(0, tileset, 0, 0);
+      this.map = map;
+
+      this.propGroup = this.propGroup || this.add.group();
+      this.treasureGroup = this.treasureGroup || this.add.group();
+
+      var self = this;
+      var scale = TS / w.mpt;   // world metres -> pixels
+
+      w.props.forEach(function (p) {
+        var px = p.x * scale, py = p.y * scale;
+        if (p.kind === "house") {
+          var h = TILE.houses[p.v];
+          for (var r = 0; r < 3; r++) {
+            for (var c = 0; c < 3; c++) {
+              var frame = r === 0 ? h.roof[c] : (r === 1 ? h.mid[c] : h.wall[c]);
+              var img = self.add.image(px + (c - 1) * TS, py + (r - 2) * TS, "tiles", frame)
+                .setOrigin(0.5).setDepth(py);
+              self.propGroup.add(img);
+            }
+          }
+        } else if (p.kind === "tree") {
+          if (p.tt !== null && p.tt !== undefined) {
+            self.propGroup.add(self.add.image(px, py - TS, "tiles", p.tt)
+              .setOrigin(0.5, 0.85).setDepth(py));
+          }
+          self.propGroup.add(self.add.image(px, py, "tiles", p.tb)
+            .setOrigin(0.5, 0.85).setDepth(py));
+        } else {
+          self.propGroup.add(self.add.image(px, py, "tiles", TILE.bush)
+            .setOrigin(0.5, 0.85).setDepth(py));
+        }
+      });
+
+      // fog over ground the dog has not walked
+      this.fogGfx = this.fogGfx || this.add.graphics().setDepth(90000);
+      this.fogGfx.clear();
+      this.fogGfx.fillStyle(0x0d1119, 0.5);
+      var b = state.bounds;
+      for (var r2 = 0; r2 < GRID_ROWS; r2++) {
+        for (var c2 = 0; c2 < GRID_COLS; c2++) {
+          if (state.grid[r2][c2].explored) continue;
+          var x0 = (c2 / GRID_COLS) * w.cols * TS, x1 = ((c2 + 1) / GRID_COLS) * w.cols * TS;
+          var y0 = (r2 / GRID_ROWS) * w.rows * TS, y1 = ((r2 + 1) / GRID_ROWS) * w.rows * TS;
+          this.fogGfx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        }
+      }
+
+      // treasures
+      for (var r3 = 0; r3 < GRID_ROWS; r3++) {
+        for (var c3 = 0; c3 < GRID_COLS; c3++) {
+          var cell = state.grid[r3][c3];
+          if (!cell.explored || !cell.treasure) continue;
+          var tx = ((c3 + 0.5) / GRID_COLS) * w.cols * TS;
+          var ty = ((r3 + 0.5) / GRID_ROWS) * w.rows * TS;
+          var t = this.add.text(tx, ty, cell.treasure, { fontSize: "13px" })
+            .setOrigin(0.5).setDepth(ty + 1);
+          this.treasureGroup.add(t);
+        }
+      }
+
+      // faint record of every walk
+      this.trailGfx = this.trailGfx || this.add.graphics().setDepth(80000);
+      this.trailGfx.clear();
+      this.trailGfx.lineStyle(2, 0x3a2c18, 0.35);
+      state.walks.forEach(function (walk) {
+        self.trailGfx.beginPath();
+        walk.forEach(function (pt, i) {
+          var m = w.toM(pt.lat, pt.lng);
+          if (i === 0) self.trailGfx.moveTo(m.x * scale, m.y * scale);
+          else self.trailGfx.lineTo(m.x * scale, m.y * scale);
+        });
+        self.trailGfx.strokePath();
+      });
+
+      this.liveGfx = this.liveGfx || this.add.graphics().setDepth(80001);
+      this.liveGfx.clear();
+
+      // the dog
+      if (!this.dog) {
+        this.dog = this.add.sprite(0, 0, "dog").setOrigin(0.5, 0.9);
+        this.dog.play("sit");
+      }
+      this.dog.setDepth(100000);
+
+      var home = w.toM(state.points[0].lat, state.points[0].lng);
+      this.dog.setPosition(home.x * scale, home.y * scale);
+
+      var cam = this.cameras.main;
+      cam.setBounds(0, 0, w.cols * TS, w.rows * TS);
+      cam.setZoom(3);
+      cam.centerOn(home.x * scale, home.y * scale);
+      cam.roundPixels = true;
+
+      this.worldScale = scale;
+      this.worldRef = w;
+    }
+
+    update(time, delta) {
+      if (!pb.playing || !pb.walk) return;
+      pb.elapsed += delta * pb.speed;
+      var progress = Math.min(pb.elapsed / pb.duration, 1);
+      this.applyProgress(progress);
+      if (progress >= 1) { pb.playing = false; setPlayLabel(); this.dog.play("sit"); }
+    }
+
+    applyProgress(progress) {
+      var walk = pb.walk, w = this.worldRef, scale = this.worldScale;
+      var t0 = new Date(walk[0].t).getTime();
+      var t1 = new Date(walk[walk.length - 1].t).getTime();
+      var target = t0 + progress * (t1 - t0);
+
+      var cur = walk[walk.length - 1], travelled = [];
+      for (var i = 0; i < walk.length; i++) {
+        var ti = new Date(walk[i].t).getTime();
+        if (ti <= target) { travelled.push(walk[i]); continue; }
+        var prev = walk[i - 1] || walk[0];
+        var pt = new Date(prev.t).getTime();
+        var f = ti - pt > 0 ? (target - pt) / (ti - pt) : 0;
+        cur = { lat: prev.lat + (walk[i].lat - prev.lat) * f,
+                lng: prev.lng + (walk[i].lng - prev.lng) * f, t: new Date(target).toISOString() };
+        break;
+      }
+      travelled = travelled.concat([cur]);
+
+      var m = w.toM(cur.lat, cur.lng);
+      var px = m.x * scale, py = m.y * scale;
+      if (px < this.dog.x - 0.2) this.dog.setFlipX(true);
+      else if (px > this.dog.x + 0.2) this.dog.setFlipX(false);
+      this.dog.setPosition(px, py);
+      this.cameras.main.pan(px, py, 120, "Linear", true);
+
+      this.liveGfx.clear();
+      this.liveGfx.lineStyle(2, 0xe8a33d, 0.95);
+      this.liveGfx.beginPath();
+      var self = this;
+      travelled.forEach(function (p, i) {
+        var mm = w.toM(p.lat, p.lng);
+        if (i === 0) self.liveGfx.moveTo(mm.x * scale, mm.y * scale);
+        else self.liveGfx.lineTo(mm.x * scale, mm.y * scale);
+      });
+      this.liveGfx.strokePath();
+
+      var km = 0;
+      for (var k = 1; k < travelled.length; k++) km += haversineKm(travelled[k - 1], travelled[k]);
+      document.getElementById("scrub").value = Math.round(progress * 1000);
+      document.getElementById("clock").textContent =
+        fmtTime(cur.t) + "  ·  " + km.toFixed(2) + " km";
+    }
+  }
+
+  // ============================================================
+  //  UI
+  // ============================================================
+
+  function fmtDate(iso) {
+    var d = new Date(iso);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  function fmtTime(iso) {
+    var d = new Date(iso);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
+      d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  function walkKm(walk) {
+    var km = 0;
+    for (var i = 1; i < walk.length; i++) km += haversineKm(walk[i - 1], walk[i]);
+    return km;
+  }
+
+  function updateStats() {
+    var km = 0, treasures = 0, explored = 0;
+    state.walks.forEach(function (w) { km += walkKm(w); });
+    state.grid.forEach(function (row) {
+      row.forEach(function (c) { if (c.explored) explored++; if (c.explored && c.treasure) treasures++; });
+    });
+    document.getElementById("s-dist").textContent = km.toFixed(1);
+    document.getElementById("s-walks").textContent = state.walks.length;
+    document.getElementById("s-explored").textContent =
+      Math.round((explored / (GRID_ROWS * GRID_COLS)) * 100) + "%";
+    document.getElementById("s-treasure").textContent = treasures;
+    renderWalkList();
+  }
+
+  function renderWalkList() {
+    var el = document.getElementById("walk-list");
+    el.innerHTML = "";
+    state.walks.forEach(function (walk, i) {
+      var mins = Math.round((new Date(walk[walk.length - 1].t) - new Date(walk[0].t)) / 60000);
+      var row = document.createElement("div");
+      row.className = "walk" + (pb.index === i ? " active" : "");
+      row.innerHTML = '<div><div class="d">' + fmtDate(walk[0].t) + '</div>' +
+        '<div class="m">' + walkKm(walk).toFixed(1) + ' km · ' + mins + ' min</div></div>' +
+        '<div style="font-size:15px">▶</div>';
+      row.addEventListener("click", function () { startWalk(i); });
+      el.appendChild(row);
+    });
+  }
+
+  function startWalk(i) {
+    var walk = state.walks[i];
+    if (!walk || walk.length < 2) return;
+    pb.walk = walk; pb.index = i; pb.playing = true; pb.elapsed = 0;
+    pb.duration = Math.min(40000, Math.max(9000, walk.length * 200));
+    document.getElementById("transport").classList.remove("off");
+    setPlayLabel();
+    renderWalkList();
+    if (scene) { scene.dog.play("trot"); scene.applyProgress(0); }
+  }
+
+  function stopWalk() {
+    pb.playing = false; pb.walk = null; pb.index = -1;
+    document.getElementById("transport").classList.add("off");
+    if (scene) { scene.liveGfx.clear(); scene.dog.play("sit"); }
+    renderWalkList();
+  }
+
+  function setPlayLabel() {
+    document.getElementById("btn-play").textContent = pb.playing ? "Pause" : "Play";
+  }
+
+  function toast(msg) {
+    var t = document.getElementById("toast");
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(function () { t.classList.remove("show"); }, 2600);
+  }
+
+  function hideBoot() {
+    var b = document.getElementById("boot");
+    b.classList.add("gone");
+    setTimeout(function () { b.style.display = "none"; }, 500);
+  }
+
+  function setDataMsg(msg, ok) {
+    var el = document.getElementById("data-msg");
+    el.textContent = msg;
+    el.className = ok ? "ok" : "err";
+  }
+
+  function loadJson(text) {
+    try {
+      var data = JSON.parse(text);
+      if (!Array.isArray(data) || !data.length) throw new Error("Expected a non-empty array of points.");
+      data.forEach(function (p, i) {
+        if (typeof p.lat !== "number" || typeof p.lng !== "number" || !p.t)
+          throw new Error("Point " + i + ' is missing "lat", "lng" or "t".');
+        if (isNaN(new Date(p.t).getTime())) throw new Error("Point " + i + ' has an unreadable "t".');
+      });
+      stopWalk();
+      buildFromPoints(data);
+      state.osmWays = null;
+      setDataMsg("Loaded " + data.length + " points across " + state.walks.length + " walk(s).", true);
+      rebuildFromData();
+      document.getElementById("data-panel").classList.remove("open");
+      toast("Loaded " + state.walks.length + " walks");
+    } catch (e) {
+      setDataMsg("Couldn't load that: " + e.message, false);
+    }
+  }
+
+  // Refetch the map around whatever data is now loaded, then rebuild the level.
+  function rebuildFromData() {
+    if (scene) scene.buildLevel();
+    overpass(areaQuery(state.bounds)).then(function (ways) {
+      if (!ways || !ways.length) { toast("Map data unavailable — showing plain ground"); return; }
+      state.osmWays = ways;
+      if (scene) scene.buildLevel();
+    });
+  }
+
+  document.getElementById("btn-walks").addEventListener("click", function () {
+    document.getElementById("walks").classList.toggle("hidden");
+  });
+  document.getElementById("btn-data").addEventListener("click", function () {
+    document.getElementById("data-panel").classList.add("open");
+  });
+  document.getElementById("btn-close-data").addEventListener("click", function () {
+    document.getElementById("data-panel").classList.remove("open");
+  });
+  document.getElementById("btn-load").addEventListener("click", function () {
+    var t = document.getElementById("json-input").value.trim();
+    if (!t) { setDataMsg("Paste some JSON first.", false); return; }
+    loadJson(t);
+  });
+  document.getElementById("json-file").addEventListener("change", function (e) {
+    var f = e.target.files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      document.getElementById("json-input").value = ev.target.result;
+      loadJson(ev.target.result);
+    };
+    reader.onerror = function () { setDataMsg("Couldn't read that file.", false); };
+    reader.readAsText(f);
+  });
+  document.getElementById("btn-demo").addEventListener("click", function () {
+    document.getElementById("data-panel").classList.remove("open");
+    startDemo(true);
+  });
+  document.getElementById("btn-play").addEventListener("click", function () {
+    if (!pb.walk) return;
+    if (!pb.playing && pb.elapsed >= pb.duration) pb.elapsed = 0;
+    pb.playing = !pb.playing;
+    if (scene) scene.dog.play(pb.playing ? "trot" : "sit");
+    setPlayLabel();
+  });
+  document.getElementById("btn-stop").addEventListener("click", stopWalk);
+  document.getElementById("scrub").addEventListener("input", function (e) {
+    if (!pb.walk) return;
+    pb.playing = false; setPlayLabel();
+    if (scene) scene.dog.play("sit");
+    pb.elapsed = (Number(e.target.value) / 1000) * pb.duration;
+    if (scene) scene.applyProgress(Number(e.target.value) / 1000);
+  });
+  document.querySelectorAll(".speed .btn").forEach(function (b) {
+    b.addEventListener("click", function () {
+      pb.speed = Number(b.getAttribute("data-speed"));
+      document.querySelectorAll(".speed .btn").forEach(function (o) { o.classList.toggle("on", o === b); });
+    });
+  });
+
+  // ============================================================
+  //  Start
+  // ============================================================
+
+  function startDemo(force) {
+    buildFromPoints(fallbackWalks());
+    if (scene) scene.buildLevel();
+
+    overpass(walkableQuery(MOCK_CENTER)).then(function (ways) {
+      if (ways && ways.length > 4) {
+        var pts = demoWalksFromGraph(buildGraph(ways));
+        if (pts) { buildFromPoints(pts); }
+      }
+      return overpass(areaQuery(state.bounds));
+    }).then(function (ways) {
+      if (ways && ways.length) state.osmWays = ways;
+      if (scene) scene.buildLevel();
+      if (!ways || !ways.length) toast("Map data unavailable — showing plain ground");
+      if (force) toast("Demo walks restored");
+    });
+  }
+
+  game = new Phaser.Game({
+    type: Phaser.AUTO,
+    parent: "game",
+    backgroundColor: "#4f8f38",
+    pixelArt: true,
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.CENTER_BOTH },
+    scene: [BootScene, WorldScene]
+  });
+
+  startDemo(false);
+})();
+</script>
+</body>
+</html>
