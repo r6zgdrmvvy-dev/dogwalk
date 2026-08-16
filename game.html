@@ -473,7 +473,10 @@
     trees: [8, 9],
     // Each roof colour is five tiles: interior, then a gutter edge facing
     // north / south / west / east, so a roofline reads as a roofline.
-    roofBase: 10, roofStride: 5, roofCount: 4
+    roofBase: 10, roofStride: 5, roofCount: 4,
+    // Front elevations, two per roof colour (window / door). Drawn on the
+    // tile below a building so roofs sit on something.
+    wallBase: 30, wallStride: 2
   };
 
   var world = null;
@@ -669,6 +672,25 @@
       }
     }
 
+    // Which colour each building roof is, so its wall matches, and where a
+    // front elevation should be drawn (the tile directly below a building).
+    var roofCol = new Int8Array(cols * rows).fill(-1);
+    for (var rc = 0; rc < cols * rows; rc++) {
+      if (kindMap[rc] !== 4) continue;
+      var fpc = footprint[rc];
+      var bidc = fpc >= 0 ? Math.abs(fpc * 2654435761)
+                          : Math.abs((bCellX[rc] * 92837) ^ (bCellY[rc] * 689287));
+      roofCol[rc] = bidc % TILE.roofCount;
+    }
+    var wallMask = new Int8Array(cols * rows).fill(-1);
+    for (var wy2 = 1; wy2 < rows; wy2++) {
+      for (var wx2 = 0; wx2 < cols; wx2++) {
+        var wi = wy2 * cols + wx2;
+        if (kindMap[wi] === 4) continue;
+        if (kindMap[wi - cols] === 4) wallMask[wi] = roofCol[wi - cols];
+      }
+    }
+
     // ---- tile indices ----
     var data = [];
     for (var y = 0; y < rows; y++) {
@@ -676,6 +698,10 @@
       for (var x = 0; x < cols; x++) {
         var ii = y * cols + x, kk = kindMap[ii];
         var seed = Math.abs((x * 73856093) ^ (y * 19349663));
+        if (wallMask[ii] >= 0) {
+          line.push(TILE.wallBase + wallMask[ii] * TILE.wallStride + (seed % 3 === 0 ? 1 : 0));
+          continue;
+        }
         if (kk === 1) {
           // centre line only down the middle of the bigger roads
           var mid = majorMap[ii] && (seed % 5 === 0);
@@ -749,7 +775,10 @@
       for (var sx2 = 1; sx2 < cols; sx2++) {
         var si3 = sy2 * cols + sx2;
         if (kindMap[si3] === 4) continue;
+        // sun from the top-left, so shadow falls down-right of the mass
         if (kindMap[si3 - cols - 1] === 4) shadow[si3] = 1;
+        else if (sx2 > 1 && kindMap[si3 - cols - 2] === 4) shadow[si3] = 1;
+        else if (sy2 > 1 && kindMap[si3 - cols * 2 - 1] === 4) shadow[si3] = 1;
       }
     }
 
@@ -953,6 +982,7 @@
       this.layer.forEachTile(function (tile) {
         var n = broad(tile.x, tile.y) * 0.72 + fine(tile.x, tile.y) * 0.28;
         var i = tile.index;
+        var tint;
         if (!w.seen[tile.y * w.cols + tile.x]) {
           // unwalked ground: dimmed in place, at tile resolution
           tile.tint = mixHex(0x2e3440, 0x424a5a, n);
@@ -960,6 +990,11 @@
         }
         if (w.shadow[tile.y * w.cols + tile.x]) {
           tile.tint = mixHex(0x6e7382, 0x8e94a4, n);   // in the lee of a building
+          return;
+        }
+        if (i >= TILE.wallBase) {
+          tint = null;                       // elevations carry their own shading
+          tile.tint = mixHex(0xe6e6e6, 0xffffff, n);
           return;
         }
         if (i === TILE.grass || i === TILE.waste) {
