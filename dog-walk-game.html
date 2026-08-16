@@ -166,7 +166,7 @@
 
   .grid-wrap {
     position: relative;
-    aspect-ratio: 14 / 8;
+    aspect-ratio: 16 / 10;
     background: var(--sv-fog-dark);
     border: 6px solid var(--z-bezel);
     box-shadow:
@@ -176,11 +176,32 @@
     overflow: hidden;
   }
 
-  /* The map is drawn to a small canvas (TILE logical px per cell) and then
-     upscaled with image-rendering: pixelated. That is what actually gives
-     hard-edged chunky pixels — CSS gradients get resampled smoothly no
-     matter how the stops are placed, so real low-res sprites need a real
-     low-res raster. */
+  /* The map is bigger than its frame at playable zoom, so the frame is a
+     window onto it that you scroll/drag around — a close camera like a
+     farm sim, rather than the whole territory crushed into one screen. */
+  .map-viewport {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    cursor: grab;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--z-bezel) transparent;
+  }
+
+  .map-viewport.dragging { cursor: grabbing; }
+
+  .map-content {
+    position: relative;
+    /* --tilepx (screen px per tile) is set from JS on zoom, so overlay
+       emoji scale with the map instead of drifting out of proportion. */
+    --tilepx: 32px;
+  }
+
+  /* The canvas is drawn at TILE logical px per cell and then upscaled with
+     image-rendering: pixelated. That is what actually gives hard-edged
+     chunky pixels — CSS gradients get resampled smoothly no matter how the
+     stops are placed, so real low-res sprites need a real low-res raster. */
   #map-canvas {
     position: absolute;
     inset: 0;
@@ -206,16 +227,19 @@
   }
 
   .map-marker {
-    font-size: clamp(13px, 2.1vw, 24px);
+    font-size: calc(var(--tilepx) * 0.8);
     z-index: 3;
     filter: drop-shadow(0 1px 1px rgba(0,0,0,0.45));
   }
 
   .map-marker.last { animation: bob 1.6s ease-in-out infinite; }
 
+  /* Kept small deliberately: treasures are scatter, not landmarks, and at
+     a close zoom a big glossy emoji swamps the pixel art behind it. */
   .map-treasure {
-    font-size: clamp(7px, 1.05vw, 12px);
+    font-size: calc(var(--tilepx) * 0.34);
     z-index: 2;
+    opacity: 0.92;
     filter: drop-shadow(0 1px 0 rgba(0,0,0,0.4));
   }
 
@@ -223,6 +247,32 @@
     0%, 100% { transform: translate(-50%, -50%); }
     50% { transform: translate(-50%, -64%); }
   }
+
+  .map-zoom {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: flex;
+    gap: 4px;
+    z-index: 6;
+  }
+
+  .zoom-btn {
+    width: 26px;
+    height: 26px;
+    border: 2px solid var(--z-bezel-dark);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--brown-dark);
+    font-family: 'Baloo 2', cursive;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .zoom-btn:active { transform: translateY(1px); }
   .playback-overlay {
     position: absolute;
     inset: 0;
@@ -242,13 +292,14 @@
 
   .dog-marker {
     position: absolute;
-    font-size: 22px;
+    font-size: calc(var(--tilepx) * 1.1);
     transform: translate(-50%, -55%);
     filter: drop-shadow(1px 2px 1px rgba(0,0,0,0.4));
     z-index: 2;
     pointer-events: none;
   }
 
+  /* Controls stay pinned to the frame, not to the scrolling map. */
   .playback-controls {
     position: absolute;
     left: 0;
@@ -260,7 +311,10 @@
     align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    z-index: 7;
   }
+
+  .playback-controls[hidden] { display: none; }
 
   .pb-btn {
     background: var(--amber);
@@ -363,6 +417,15 @@
     font-weight: 600;
     color: var(--brown);
     justify-content: center;
+  }
+
+  .map-hint {
+    margin-top: 6px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--brown);
+    opacity: 0.75;
   }
 
   .terrain-status {
@@ -539,22 +602,31 @@
     <div class="layout">
       <div class="board-frame">
         <div class="grid-wrap">
-          <canvas id="map-canvas"></canvas>
-          <div id="map-overlay"></div>
-          <div class="playback-overlay" id="playback-overlay" hidden>
-            <svg id="playback-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
-            <div class="dog-marker" id="dog-marker">🐕</div>
-            <div class="playback-controls">
-              <button class="pb-btn" id="playback-close" title="Close">✕</button>
-              <button class="pb-btn" id="playback-playpause">⏸</button>
-              <input type="range" id="playback-scrub" min="0" max="1000" value="0">
-              <div class="pb-speed">
-                <button class="pb-speed-btn" data-speed="1">1x</button>
-                <button class="pb-speed-btn" data-speed="2">2x</button>
-                <button class="pb-speed-btn" data-speed="4">4x</button>
+          <div class="map-viewport" id="map-viewport">
+            <div class="map-content" id="map-content">
+              <canvas id="map-canvas"></canvas>
+              <div id="map-overlay"></div>
+              <div class="playback-overlay" id="playback-overlay" hidden>
+                <svg id="playback-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+                <div class="dog-marker" id="dog-marker">🐕</div>
               </div>
-              <div class="pb-info" id="playback-info"></div>
             </div>
+          </div>
+          <div class="map-zoom">
+            <button class="zoom-btn" id="zoom-out" title="Zoom out">−</button>
+            <button class="zoom-btn" id="zoom-in" title="Zoom in">+</button>
+            <button class="zoom-btn" id="zoom-home" title="Centre on home">🏡</button>
+          </div>
+          <div class="playback-controls" id="playback-controls" hidden>
+            <button class="pb-btn" id="playback-close" title="Close">✕</button>
+            <button class="pb-btn" id="playback-playpause">⏸</button>
+            <input type="range" id="playback-scrub" min="0" max="1000" value="0">
+            <div class="pb-speed">
+              <button class="pb-speed-btn" data-speed="1">1x</button>
+              <button class="pb-speed-btn" data-speed="2">2x</button>
+              <button class="pb-speed-btn" data-speed="4">4x</button>
+            </div>
+            <div class="pb-info" id="playback-info"></div>
           </div>
         </div>
         <div class="legend">
@@ -568,6 +640,7 @@
           <span>〰️ burn</span>
           <span>▦ unexplored</span>
         </div>
+        <div class="map-hint">Drag the map to look around &middot; + / − to zoom &middot; 🏡 to recentre</div>
         <div class="terrain-status" id="terrain-status"></div>
       </div>
 
@@ -1257,37 +1330,61 @@
   // (houses, trees) are drawn face-on, so a house shows its roof and its
   // front wall at the same time.
 
-  var TILE = 16;
-  var ROAD_X0 = 5, ROAD_W = 6;   // 1px kerb + 4px carriageway + 1px kerb
+  var TILE = 32;
+  var ROAD_X0 = 11, ROAD_W = 10;   // 2px kerb + 6px carriageway + 2px kerb
 
   var PAL = {
-    fog: "#41402f",
-    fogEdge: "#4b4a3a",
+    fog: "#3b3a2c",
+    fogLite: "#454433",
+
     grass: "#5ea639",
+    grassDark: "#4a8a2c",
     grassLite: "#7cc23f",
     grassBright: "#9ce137",
-    grassDeep: "#3f7d25",
-    parkGrass: "#7cc23f",
-    woodFloor: "#3f7d25",
+    grassDeep: "#2f6b1e",
+
+    parkGrass: "#6fb83c",
+    woodFloor: "#3c7a24",
+
     water: "#3a8fd4",
-    waterLite: "#63b0ea",
+    waterLite: "#7cc4f0",
     waterDark: "#2a6ba8",
+
     tarmac: "#6f6f74",
-    tarmacDark: "#5f5f64",
-    kerb: "#b0aaa1",
+    tarmacLite: "#7d7d83",
+    tarmacDark: "#5a5a5f",
+    kerb: "#b8b2a8",
+    kerbShade: "#948e84",
     line: "#e6e0cd",
-    slate: "#5a5f66",
-    slateLite: "#767c85",
-    wallStone: "#d9c9a4",
+
+    outline: "#2b2118",
+    roofDark: "#464b52",
+    roofMid: "#5a6069",
+    roofLite: "#7b828c",
+    roofRed: "#9e3a2a",
+    roofRedLite: "#bd5a44",
+    wall: "#e2d3ae",
+    wallShade: "#c2b189",
     wallBrick: "#b5654a",
-    door: "#6b4423",
-    window: "#9fd3e8",
-    canopy: "#0a7112",
-    canopyLite: "#12a022",
-    canopyDark: "#08600f",
-    trunk: "#8a5216",
+    wallBrickShade: "#96513a",
+    door: "#7a4a22",
+    doorLite: "#966130",
+    window: "#a8dcf0",
+    windowDark: "#6fa8c4",
+
+    canopyOutline: "#0a3d0c",
+    canopyDark: "#12681a",
+    canopyMid: "#1c8f26",
+    canopyLite: "#3fbf38",
+    trunk: "#7a4a1c",
+    trunkLite: "#96612a",
+    trunkDark: "#513110",
+
     pebble: "#cfc9bd",
-    flower: "#e8e3a0",
+    pebbleDark: "#a49d90",
+    flowerA: "#f2e9a0",
+    flowerB: "#e88fb8",
+    flowerC: "#ffffff",
   };
 
   function px(ctx, color, x, y, w, h) {
@@ -1295,104 +1392,301 @@
     ctx.fillRect(x, y, w, h);
   }
 
-  // Face-on tree: rounded canopy with a highlight, sitting on a short trunk.
-  function drawTree(ctx, x, y) {
-    px(ctx, PAL.canopyDark, x + 1, y + 0, 6, 7);
-    px(ctx, PAL.canopyDark, x + 0, y + 1, 8, 5);
-    px(ctx, PAL.canopy,     x + 1, y + 1, 6, 5);
-    px(ctx, PAL.canopyLite, x + 2, y + 1, 2, 2);
-    px(ctx, PAL.trunk,      x + 3, y + 6, 2, 3);
+  // Hard-edged filled circle. ctx.arc() antialiases, which would soften the
+  // very edges the pixel look depends on, so spans are computed per row.
+  function pxCircle(ctx, color, cx, cy, r) {
+    ctx.fillStyle = color;
+    for (var dy = -r; dy <= r; dy++) {
+      var half = Math.floor(Math.sqrt(r * r - dy * dy));
+      ctx.fillRect(cx - half, cy + dy, half * 2 + 1, 1);
+    }
   }
 
-  // Face-on cottage: pitched roof stepped down in rows (so it reads as a
-  // roof plane), then the front wall with windows and a door.
+  // Big shaded tree: outline, dark body, mid tone, highlight, then a trunk
+  // with its own light and shade sides. ~26x34 px, so it spans most of a
+  // tile and overlaps its neighbours the way real foliage does.
+  function drawTree(ctx, x, y, scale) {
+    scale = scale || 1;
+    var r = Math.round(11 * scale);
+    var cx = x + r + 1, cy = y + r + 1;
+    var tw = Math.max(3, Math.round(5 * scale));
+    var th = Math.max(4, Math.round(9 * scale));
+
+    px(ctx, PAL.trunkDark, cx - Math.floor(tw / 2) - 1, cy + r - 2, tw + 2, th + 1);
+    px(ctx, PAL.trunk, cx - Math.floor(tw / 2), cy + r - 2, tw, th);
+    px(ctx, PAL.trunkLite, cx - Math.floor(tw / 2), cy + r - 2, 1, th);
+
+    pxCircle(ctx, PAL.canopyOutline, cx, cy, r + 1);
+    pxCircle(ctx, PAL.canopyDark, cx, cy, r);
+    pxCircle(ctx, PAL.canopyMid, cx - 1, cy - 1, Math.round(r * 0.8));
+    pxCircle(ctx, PAL.canopyLite, cx - Math.round(r * 0.35), cy - Math.round(r * 0.4), Math.round(r * 0.36));
+    // a couple of dark notches so the canopy reads as clumped leaves
+    pxCircle(ctx, PAL.canopyDark, cx + Math.round(r * 0.45), cy + Math.round(r * 0.3), Math.round(r * 0.28));
+  }
+
+  // Face-on cottage with a pitched roof, drawn big enough to carry an
+  // outline plus shading — roughly 1.4 tiles wide, so houses read as
+  // buildings rather than as one-tile icons.
   function drawHouse(ctx, x, y, brick) {
-    px(ctx, PAL.slate,     x + 3, y + 0, 2, 1);
-    px(ctx, PAL.slate,     x + 2, y + 1, 4, 1);
-    px(ctx, PAL.slateLite, x + 1, y + 2, 6, 1);
-    px(ctx, PAL.slate,     x + 0, y + 3, 8, 1);
-    px(ctx, brick ? PAL.wallBrick : PAL.wallStone, x + 1, y + 4, 6, 5);
-    px(ctx, PAL.window,    x + 2, y + 5, 1, 1);
-    px(ctx, PAL.window,    x + 5, y + 5, 1, 1);
-    px(ctx, PAL.door,      x + 3, y + 6, 2, 3);
+    var W = 44, ROOF_H = 18, WALL_H = 20;
+    var wallCol = brick ? PAL.wallBrick : PAL.wall;
+    var wallShade = brick ? PAL.wallBrickShade : PAL.wallShade;
+    var roofCol = brick ? PAL.roofRed : PAL.roofMid;
+    var roofLite = brick ? PAL.roofRedLite : PAL.roofLite;
+
+    // pitched roof: each row a little wider than the one above it
+    for (var i = 0; i < ROOF_H; i++) {
+      var half = Math.round(3 + (i / (ROOF_H - 1)) * (W / 2 - 3));
+      var rx = x + Math.round(W / 2) - half;
+      var rw = half * 2;
+      px(ctx, PAL.outline, rx - 1, y + i, rw + 2, 1);
+      px(ctx, i < 3 ? roofLite : roofCol, rx, y + i, rw, 1);
+      if (i > 2 && i < ROOF_H - 1) px(ctx, PAL.roofDark, rx + rw - 3, y + i, 3, 1);
+    }
+
+    var wy = y + ROOF_H;
+    px(ctx, PAL.outline, x + 2, wy, W - 4, WALL_H);
+    px(ctx, wallCol, x + 3, wy + 1, W - 7, WALL_H - 2);
+    px(ctx, wallShade, x + W - 8, wy + 1, 4, WALL_H - 2);
+
+    // windows with frames
+    [x + 7, x + W - 17].forEach(function (wx) {
+      px(ctx, PAL.outline, wx, wy + 4, 10, 8);
+      px(ctx, PAL.window, wx + 1, wy + 5, 8, 6);
+      px(ctx, PAL.windowDark, wx + 5, wy + 5, 4, 3);
+      px(ctx, PAL.outline, wx + 4, wy + 4, 1, 8);
+    });
+
+    // door
+    var dx = x + Math.round(W / 2) - 4;
+    px(ctx, PAL.outline, dx, wy + WALL_H - 12, 9, 12);
+    px(ctx, PAL.door, dx + 1, wy + WALL_H - 11, 7, 11);
+    px(ctx, PAL.doorLite, dx + 1, wy + WALL_H - 11, 2, 11);
+  }
+
+  // Multi-tone grass so the ground isn't one flat colour.
+  function scatterGrass(ctx, gx, gy, idx, base) {
+    var n = 5 + Math.floor(seededRandom(idx * 1.7) * 4);
+    for (var i = 0; i < n; i++) {
+      var sx = Math.floor(seededRandom(idx * 3.1 + i * 7.7) * (TILE - 3));
+      var sy = Math.floor(seededRandom(idx * 5.3 + i * 9.1) * (TILE - 3));
+      var pick = seededRandom(idx * 7.9 + i * 3.3);
+      var col = pick > 0.72 ? PAL.grassBright : (pick > 0.42 ? PAL.grassLite : PAL.grassDeep);
+      px(ctx, col, gx + sx, gy + sy, 2, 1);
+      if (pick > 0.85) px(ctx, col, gx + sx + 1, gy + sy - 1, 1, 1);
+    }
+    // occasional flower or pebble
+    if (seededRandom(idx * 11.3) > 0.55) {
+      var fx = gx + Math.floor(seededRandom(idx * 13.1) * (TILE - 4));
+      var fy = gy + Math.floor(seededRandom(idx * 17.7) * (TILE - 4));
+      var r = seededRandom(idx * 19.3);
+      var fc = r > 0.66 ? PAL.flowerA : (r > 0.33 ? PAL.flowerB : PAL.flowerC);
+      if (r > 0.82) {
+        px(ctx, PAL.pebbleDark, fx, fy, 3, 2);
+        px(ctx, PAL.pebble, fx, fy, 2, 1);
+      } else {
+        px(ctx, PAL.grassDeep, fx, fy + 1, 1, 2);
+        px(ctx, fc, fx - 1, fy, 3, 1);
+        px(ctx, fc, fx, fy - 1, 1, 3);
+      }
+    }
+  }
+
+  // Terrain colour ignores explored-ness on purpose: unexplored ground is
+  // drawn in full and then dimmed by a wash pass, so the world stays one
+  // continuous place instead of being punched full of black holes.
+  function terrainBase(cell) {
+    if (cell.terrain === "park") return PAL.parkGrass;
+    if (cell.terrain === "forest") return PAL.woodFloor;
+    if (cell.terrain === "water") return PAL.water;
+    return PAL.grass;
   }
 
   function drawGroundTile(ctx, gx, gy, cell, idx) {
-    if (!cell.explored) {
-      px(ctx, PAL.fog, gx, gy, TILE, TILE);
-      if ((idx * 7) % 5 === 0) px(ctx, PAL.fogEdge, gx + 3, gy + 4, 2, 2);
-      return;
-    }
-
-    var base = PAL.grass;
-    if (cell.terrain === "park") base = PAL.parkGrass;
-    else if (cell.terrain === "forest") base = PAL.woodFloor;
-    else if (cell.terrain === "water") base = PAL.water;
-    px(ctx, base, gx, gy, TILE, TILE);
+    px(ctx, terrainBase(cell), gx, gy, TILE, TILE);
 
     if (cell.terrain === "water") {
-      var wy = Math.floor(seededRandom(idx * 3.3) * (TILE - 4));
-      px(ctx, PAL.waterLite, gx + 2, gy + wy, 5, 1);
-      px(ctx, PAL.waterDark, gx + 8, gy + ((wy + 6) % (TILE - 2)), 4, 1);
+      for (var i = 0; i < 3; i++) {
+        var wy = Math.floor(seededRandom(idx * (3.3 + i)) * (TILE - 2));
+        var wx = Math.floor(seededRandom(idx * (5.1 + i)) * (TILE - 8));
+        px(ctx, i % 2 ? PAL.waterLite : PAL.waterDark, gx + wx, gy + wy, 6, 1);
+      }
       return;
     }
 
-    // grass tufts: a few hard-edged specks, positioned per-cell so the
-    // ground doesn't visibly repeat one stamp across the map
-    var t1x = Math.floor(seededRandom(idx * 3.31) * (TILE - 3));
-    var t1y = Math.floor(seededRandom(idx * 5.77) * (TILE - 3));
-    var t2x = Math.floor(seededRandom(idx * 7.13) * (TILE - 3));
-    var t2y = Math.floor(seededRandom(idx * 9.41) * (TILE - 3));
-    px(ctx, PAL.grassBright, gx + t1x, gy + t1y, 2, 1);
-    px(ctx, PAL.grassDeep,   gx + t2x, gy + t2y, 1, 2);
+    scatterGrass(ctx, gx, gy, idx, terrainBase(cell));
+  }
+
+  // Ragged terrain boundaries. Straight cell-edge borders were the single
+  // clearest sign that this is a grid of squares rather than a place, so
+  // where two different terrains meet, each side chews irregular notches
+  // into the other along the seam.
+  function featherEdges(ctx, r, c) {
+    var cell = state.grid[r][c];
+    var gx = c * TILE, gy = r * TILE;
+    var idx = r * GRID_COLS + c;
+    var mine = terrainBase(cell);
+
+    function seam(nr, nc, horizontal, atFar) {
+      if (nr < 0 || nr >= GRID_ROWS || nc < 0 || nc >= GRID_COLS) return;
+      var other = state.grid[nr][nc];
+      var otherCol = terrainBase(other);
+      if (otherCol === mine) return;
+      // roads and water keep clean edges; soft ground is what frays
+      if (cell.terrain === "water" || other.terrain === "water") return;
+
+      for (var t = 0; t < TILE; t += 2) {
+        var depth = Math.floor(seededRandom((idx + 1) * 2.7 + t * 5.9 + (horizontal ? 0.5 : 0)) * 4);
+        if (depth <= 0) continue;
+        if (horizontal) {
+          px(ctx, otherCol, gx + t, atFar ? gy + TILE - depth : gy, 2, depth);
+        } else {
+          px(ctx, otherCol, atFar ? gx + TILE - depth : gx, gy + t, depth, 2);
+        }
+      }
+    }
+
+    seam(r - 1, c, true, false);
+    seam(r + 1, c, true, true);
+    seam(r, c - 1, false, false);
+    seam(r, c + 1, false, true);
   }
 
   function drawRoadTile(ctx, gx, gy, r, c) {
     var g = state.grid[r][c];
     var major = g.roadMajor;
-    var x0 = major ? ROAD_X0 - 1 : ROAD_X0;
-    var w = major ? ROAD_W + 2 : ROAD_W;
+    var x0 = major ? ROAD_X0 - 2 : ROAD_X0;
+    var w = major ? ROAD_W + 4 : ROAD_W;
 
     function isRoad(nr, nc) {
       return nr >= 0 && nr < GRID_ROWS && nc >= 0 && nc < GRID_COLS &&
-        state.grid[nr][nc].explored && state.grid[nr][nc].road;
+        state.grid[nr][nc].road;
     }
 
-    // Each arm is a pavement band with the tarmac carriageway inset inside
-    // it, so the kerb lines run continuously along both sides of the street.
+    // pavement band with the carriageway inset inside it
     function arm(bx, by, bw, bh, horizontal) {
-      px(ctx, PAL.kerb, gx + bx, gy + by, bw, bh);
-      if (horizontal) px(ctx, PAL.tarmac, gx + bx, gy + by + 1, bw, bh - 2);
-      else px(ctx, PAL.tarmac, gx + bx + 1, gy + by, bw - 2, bh);
+      px(ctx, PAL.kerbShade, gx + bx, gy + by, bw, bh);
+      if (horizontal) {
+        px(ctx, PAL.kerb, gx + bx, gy + by, bw, bh - 1);
+        px(ctx, PAL.tarmac, gx + bx, gy + by + 2, bw, bh - 4);
+      } else {
+        px(ctx, PAL.kerb, gx + bx, gy + by, bw - 1, bh);
+        px(ctx, PAL.tarmac, gx + bx + 2, gy + by, bw - 4, bh);
+      }
     }
 
-    var far = TILE - x0 - w; // distance from the arm's far edge to the tile edge
-
+    var far = TILE - x0 - w;
     if (isRoad(r - 1, c)) arm(x0, 0, w, x0 + w, false);
     if (isRoad(r + 1, c)) arm(x0, x0, w, w + far, false);
     if (isRoad(r, c - 1)) arm(0, x0, x0 + w, w, true);
     if (isRoad(r, c + 1)) arm(x0, x0, w + far, w, true);
 
-    // junction hub, drawn last so arms meet cleanly in the middle
     px(ctx, PAL.kerb, gx + x0, gy + x0, w, w);
-    px(ctx, PAL.tarmac, gx + x0 + 1, gy + x0 + 1, w - 2, w - 2);
+    px(ctx, PAL.tarmac, gx + x0 + 2, gy + x0 + 2, w - 4, w - 4);
 
-    // dashed centre line on the bigger through-roads
+    // worn tarmac speckle so the road isn't a flat grey bar
+    var idx = r * GRID_COLS + c;
+    for (var i = 0; i < 3; i++) {
+      if (seededRandom(idx * (2.9 + i)) > 0.55) {
+        px(ctx, seededRandom(idx * (4.3 + i)) > 0.5 ? PAL.tarmacLite : PAL.tarmacDark,
+          gx + x0 + 2 + Math.floor(seededRandom(idx * (6.1 + i)) * (w - 5)),
+          gy + x0 + 2 + Math.floor(seededRandom(idx * (8.7 + i)) * (w - 5)), 2, 1);
+      }
+    }
+
     if (major) {
       var mid = x0 + Math.floor(w / 2);
       if (isRoad(r, c - 1) || isRoad(r, c + 1)) {
-        for (var lx = 1; lx < TILE; lx += 4) px(ctx, PAL.line, gx + lx, gy + mid, 2, 1);
+        for (var lx = 2; lx < TILE; lx += 8) px(ctx, PAL.line, gx + lx, gy + mid, 4, 1);
       } else if (isRoad(r - 1, c) || isRoad(r + 1, c)) {
-        for (var ly = 1; ly < TILE; ly += 4) px(ctx, PAL.line, gx + mid, gy + ly, 1, 2);
+        for (var ly = 2; ly < TILE; ly += 8) px(ctx, PAL.line, gx + mid, gy + ly, 1, 4);
       }
     }
   }
 
-  function drawStreamTile(ctx, gx, gy, idx) {
-    for (var i = 0; i < TILE; i += 2) {
-      var off = Math.floor(seededRandom((idx + i) * 2.7) * 2);
-      px(ctx, PAL.water, gx + i, gy + TILE - 2 - i + off, 2, 2);
+  // Dims not-yet-walked ground. Drawn in narrow strips whose ends are
+  // jittered wherever the tile borders explored ground, so the edge of the
+  // discovered area is ragged rather than a crisp rectangle.
+  function washUnexplored(ctx, r, c) {
+    var gx = c * TILE, gy = r * TILE, idx = r * GRID_COLS + c;
+    var expUp = r > 0 && state.grid[r - 1][c].explored;
+    var expDown = r < GRID_ROWS - 1 && state.grid[r + 1][c].explored;
+    var expLeft = c > 0 && state.grid[r][c - 1].explored;
+    var expRight = c < GRID_COLS - 1 && state.grid[r][c + 1].explored;
+
+    var startT = expLeft ? Math.floor(seededRandom(idx * 7.7) * 5) : 0;
+    var endT = TILE - (expRight ? Math.floor(seededRandom(idx * 9.1) * 5) : 0);
+
+    ctx.fillStyle = "rgba(10, 16, 8, 0.62)";
+    for (var t = startT; t < endT; t += 2) {
+      var top = expUp ? Math.floor(seededRandom(idx * 3.1 + t * 1.7) * 5) : 0;
+      var bot = expDown ? Math.floor(seededRandom(idx * 5.3 + t * 2.3) * 5) : 0;
+      var h = TILE - top - bot;
+      if (h > 0) ctx.fillRect(gx + t, gy + top, 2, h);
     }
+  }
+
+  function drawStreamTile(ctx, gx, gy, idx) {
+    for (var i = 0; i < TILE; i += 3) {
+      var off = Math.floor(seededRandom((idx + i) * 2.7) * 3);
+      px(ctx, PAL.waterDark, gx + i, gy + TILE - 5 - i + off, 3, 4);
+      px(ctx, PAL.water, gx + i, gy + TILE - 5 - i + off, 3, 3);
+      px(ctx, PAL.waterLite, gx + i, gy + TILE - 5 - i + off, 2, 1);
+    }
+  }
+
+  // ---------- camera (zoom + pan) ----------
+  //
+  // The map is drawn at a close, playable zoom and the frame is a window
+  // onto it. ZOOM_LEVELS are whole-number multiples of TILE so upscaled
+  // pixels stay square and hard-edged; a fractional scale would give some
+  // pixels 2 screen px and others 3.
+  var ZOOM_LEVELS = [1, 2, 3, 4];
+  var zoomIndex = 1; // 2x -> 64 screen px per tile, farm-sim framing
+  var mapCentred = false;
+
+  function mapScale() { return ZOOM_LEVELS[zoomIndex]; }
+
+  function applyMapScale() {
+    var content = document.getElementById("map-content");
+    if (!content) return;
+    var tilePx = TILE * mapScale();
+    content.style.width = (GRID_COLS * tilePx) + "px";
+    content.style.height = (GRID_ROWS * tilePx) + "px";
+    content.style.setProperty("--tilepx", tilePx + "px");
+  }
+
+  // Keeps the same world point under the middle of the frame across a zoom
+  // change, so zooming doesn't fling you to a different part of the map.
+  function setZoom(nextIndex) {
+    var viewport = document.getElementById("map-viewport");
+    nextIndex = Math.min(Math.max(nextIndex, 0), ZOOM_LEVELS.length - 1);
+    if (nextIndex === zoomIndex) return;
+
+    var before = mapScale();
+    var cx = (viewport.scrollLeft + viewport.clientWidth / 2) / before;
+    var cy = (viewport.scrollTop + viewport.clientHeight / 2) / before;
+
+    zoomIndex = nextIndex;
+    applyMapScale();
+
+    var after = mapScale();
+    viewport.scrollLeft = cx * after - viewport.clientWidth / 2;
+    viewport.scrollTop = cy * after - viewport.clientHeight / 2;
+  }
+
+  function centreOn(row, col) {
+    var viewport = document.getElementById("map-viewport");
+    if (!viewport) return;
+    var tilePx = TILE * mapScale();
+    viewport.scrollLeft = (col + 0.5) * tilePx - viewport.clientWidth / 2;
+    viewport.scrollTop = (row + 0.5) * tilePx - viewport.clientHeight / 2;
+  }
+
+  function centreOnHome() {
+    if (!state.points.length) return;
+    var home = pointToCell(state.points[0], state.bounds);
+    centreOn(home.row, home.col);
   }
 
   function renderGrid() {
@@ -1400,6 +1694,7 @@
     var overlay = document.getElementById("map-overlay");
     if (!canvas) return;
 
+    applyMapScale();
     canvas.width = GRID_COLS * TILE;
     canvas.height = GRID_ROWS * TILE;
     var ctx = canvas.getContext("2d");
@@ -1415,11 +1710,16 @@
       }
     }
 
-    // pass 2 — streams, then roads (both lie flat on the ground plane)
+    // pass 2 — fray the seams between different terrains so the map stops
+    // reading as a grid of coloured squares
+    for (r = 0; r < GRID_ROWS; r++) {
+      for (c = 0; c < GRID_COLS; c++) featherEdges(ctx, r, c);
+    }
+
+    // pass 3 — streams, then roads (both lie flat on the ground plane)
     for (r = 0; r < GRID_ROWS; r++) {
       for (c = 0; c < GRID_COLS; c++) {
         g = state.grid[r][c];
-        if (!g.explored) continue;
         idx = r * GRID_COLS + c;
         if (g.stream) drawStreamTile(ctx, c * TILE, r * TILE, idx);
       }
@@ -1427,52 +1727,55 @@
     for (r = 0; r < GRID_ROWS; r++) {
       for (c = 0; c < GRID_COLS; c++) {
         g = state.grid[r][c];
-        if (g.explored && g.road) drawRoadTile(ctx, c * TILE, r * TILE, r, c);
+        if (g.road) drawRoadTile(ctx, c * TILE, r * TILE, r, c);
       }
     }
 
-    // pass 3 — upright props, drawn top row first so nearer ones overlap
-    // the ones behind them, the way a 3/4 camera stacks sprites.
+    // pass 4 — upright props, row by row so nearer sprites overlap the ones
+    // behind them, the way a 3/4 camera stacks things.
     //
-    // Props go in the tile corners because the road runs through the middle
-    // of the tile; a centred building would be bisected by its own street.
-    var QUADS = [[0, 0], [TILE - 8, 0], [0, TILE - 9], [TILE - 8, TILE - 9]];
+    // Buildings are placed on a sparse lattice rather than one per cell:
+    // a house sprite is wider than a tile, so drawing one in every cell
+    // would tile them into a solid wall instead of a street of houses.
     for (r = 0; r < GRID_ROWS; r++) {
       for (c = 0; c < GRID_COLS; c++) {
         g = state.grid[r][c];
-        if (!g.explored) continue;
         idx = r * GRID_COLS + c;
         var gx = c * TILE, gy = r * TILE;
-        var q = function (n) { return QUADS[Math.floor(seededRandom(n) * 4) % 4]; };
+
+        // offset a prop away from the road running through the tile centre
+        var off = function (seed, size) {
+          var far = seededRandom(seed) > 0.5;
+          var jitter = Math.floor(seededRandom(seed * 1.7) * 4) - 2;
+          return (far ? TILE - size + 2 : -2) + jitter;
+        };
 
         if (g.terrain === "forest") {
-          var q1 = q(idx * 2.1), q2 = q(idx * 4.3);
-          drawTree(ctx, gx + q1[0], gy + q1[1]);
-          drawTree(ctx, gx + q2[0], gy + q2[1]);
+          drawTree(ctx, gx + off(idx * 2.1, 24), gy + off(idx * 2.7, 26), 1);
+          if (seededRandom(idx * 4.3) > 0.35) {
+            drawTree(ctx, gx + off(idx * 4.9, 24), gy + off(idx * 5.3, 26), 0.75);
+          }
         } else if (g.terrain === "town") {
-          var qh = q(idx * 3.1);
-          drawHouse(ctx, gx + qh[0], gy + qh[1], seededRandom(idx * 8.8) > 0.5);
-          if (seededRandom(idx * 10.4) > 0.4) {
-            var qh2 = q(idx * 11.9);
-            drawHouse(ctx, gx + qh2[0], gy + qh2[1], seededRandom(idx * 9.2) > 0.5);
+          var lattice = (r % 2 === 0) && (c % 2 === 0);
+          if (lattice) {
+            drawHouse(ctx, gx + off(idx * 3.1, 44), gy + off(idx * 3.7, 38),
+              seededRandom(idx * 8.8) > 0.5);
+          } else if (seededRandom(idx * 12.6) > 0.45) {
+            drawTree(ctx, gx + off(idx * 14.2, 24), gy + off(idx * 15.8, 26), 0.8);
           }
-          if (seededRandom(idx * 12.6) > 0.6) {
-            var qt = q(idx * 14.2);
-            drawTree(ctx, gx + qt[0], gy + qt[1]);
-          }
-        } else if (g.terrain === "park" && seededRandom(idx * 5.1) > 0.45) {
-          var qp = q(idx * 5.5);
-          drawTree(ctx, gx + qp[0], gy + qp[1]);
-        } else if (g.terrain === "field" && seededRandom(idx * 6.8) > 0.72) {
-          var qf = q(idx * 7.2);
-          drawTree(ctx, gx + qf[0], gy + qf[1]);
+        } else if (g.terrain === "park" && seededRandom(idx * 5.1) > 0.4) {
+          drawTree(ctx, gx + off(idx * 5.5, 24), gy + off(idx * 6.1, 26), 1);
+        } else if (g.terrain === "field" && seededRandom(idx * 6.8) > 0.7) {
+          drawTree(ctx, gx + off(idx * 7.2, 24), gy + off(idx * 7.9, 26), 0.85);
         }
+      }
+    }
 
-        if (g.terrain !== "water" && !g.road && seededRandom(idx * 11.3) > 0.7) {
-          var sx = Math.floor(seededRandom(idx * 15.1) * (TILE - 2));
-          var sy = Math.floor(seededRandom(idx * 17.3) * (TILE - 2));
-          px(ctx, seededRandom(idx * 13.7) > 0.5 ? PAL.pebble : PAL.flower, gx + sx, gy + sy, 1, 1);
-        }
+    // pass 5 — dim everything not yet walked, so exploring lights the world
+    // up rather than carving holes out of it
+    for (r = 0; r < GRID_ROWS; r++) {
+      for (c = 0; c < GRID_COLS; c++) {
+        if (!state.grid[r][c].explored) washUnexplored(ctx, r, c);
       }
     }
 
@@ -1498,6 +1801,12 @@
     overlay.innerHTML += '<span class="map-marker" style="' + pos(homeCell.row, homeCell.col) + '">🏡</span>';
     if (lastCell.row !== homeCell.row || lastCell.col !== homeCell.col) {
       overlay.innerHTML += '<span class="map-marker last" style="' + pos(lastCell.row, lastCell.col) + '">🐾</span>';
+    }
+
+    // Park the camera on home the first time there's a map to look at.
+    if (!mapCentred) {
+      mapCentred = true;
+      centreOnHome();
     }
   }
 
@@ -1652,6 +1961,8 @@
     svg.appendChild(trailLine);
 
     document.getElementById("playback-overlay").hidden = false;
+    document.getElementById("playback-controls").hidden = false;
+    centreOn(pointToCell(walk[0], state.bounds).row, pointToCell(walk[0], state.bounds).col);
     document.getElementById("playback-scrub").value = 0;
 
     renderPlaybackFrame(0);
@@ -1682,6 +1993,27 @@
     document.getElementById("playback-scrub").value = Math.round(progress * 1000);
     document.getElementById("playback-info").textContent =
       formatWalkDate(current.t) + " (" + walkDistanceKm(traveled).toFixed(2) + " km so far)";
+
+    followDog(pos);
+  }
+
+  // At playable zoom the dog can walk off-frame, so the camera trails it —
+  // but only nudges when it nears the edge, so the map isn't constantly
+  // sliding under a viewer who is trying to look around.
+  function followDog(pos) {
+    var viewport = document.getElementById("map-viewport");
+    if (!viewport) return;
+    var content = document.getElementById("map-content");
+    var x = (pos.x / 100) * content.offsetWidth;
+    var y = (pos.y / 100) * content.offsetHeight;
+    var padX = viewport.clientWidth * 0.28;
+    var padY = viewport.clientHeight * 0.28;
+
+    if (x < viewport.scrollLeft + padX) viewport.scrollLeft = x - padX;
+    else if (x > viewport.scrollLeft + viewport.clientWidth - padX) viewport.scrollLeft = x - viewport.clientWidth + padX;
+
+    if (y < viewport.scrollTop + padY) viewport.scrollTop = y - padY;
+    else if (y > viewport.scrollTop + viewport.clientHeight - padY) viewport.scrollTop = y - viewport.clientHeight + padY;
   }
 
   function playbackStep(now) {
@@ -1709,6 +2041,7 @@
 
   function closePlayback() {
     document.getElementById("playback-overlay").hidden = true;
+    document.getElementById("playback-controls").hidden = true;
     if (pb.rafId) {
       cancelAnimationFrame(pb.rafId);
       pb.rafId = null;
@@ -1774,6 +2107,42 @@
   });
 
   document.getElementById("playback-close").addEventListener("click", closePlayback);
+
+  document.getElementById("zoom-in").addEventListener("click", function () { setZoom(zoomIndex + 1); });
+  document.getElementById("zoom-out").addEventListener("click", function () { setZoom(zoomIndex - 1); });
+  document.getElementById("zoom-home").addEventListener("click", centreOnHome);
+
+  // Drag anywhere on the map to pan it, as well as normal scrolling.
+  (function enableDragPan() {
+    var viewport = document.getElementById("map-viewport");
+    var dragging = false, startX = 0, startY = 0, startLeft = 0, startTop = 0;
+
+    viewport.addEventListener("pointerdown", function (e) {
+      if (e.button !== 0) return;
+      dragging = true;
+      startX = e.clientX; startY = e.clientY;
+      startLeft = viewport.scrollLeft; startTop = viewport.scrollTop;
+      viewport.classList.add("dragging");
+      viewport.setPointerCapture(e.pointerId);
+    });
+
+    viewport.addEventListener("pointermove", function (e) {
+      if (!dragging) return;
+      viewport.scrollLeft = startLeft - (e.clientX - startX);
+      viewport.scrollTop = startTop - (e.clientY - startY);
+    });
+
+    var endDrag = function (e) {
+      if (!dragging) return;
+      dragging = false;
+      viewport.classList.remove("dragging");
+      if (e.pointerId !== undefined && viewport.hasPointerCapture(e.pointerId)) {
+        viewport.releasePointerCapture(e.pointerId);
+      }
+    };
+    viewport.addEventListener("pointerup", endDrag);
+    viewport.addEventListener("pointercancel", endDrag);
+  })();
 
   document.getElementById("playback-playpause").addEventListener("click", function () {
     if (pb.walkIndex === null) return;
