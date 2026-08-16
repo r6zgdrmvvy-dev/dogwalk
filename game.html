@@ -45,6 +45,32 @@
   #bar { width: 240px; height: 10px; border: 2px solid var(--panel-edge); border-radius: 6px; overflow: hidden; }
   #bar i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.2s ease; }
 
+  /* The dog himself, trotting on the spot: the four-frame walk cycle from the
+     game's own sprite sheet, stepped so the pixels stay hard-edged. */
+  .trotting {
+    width: 64px; height: 64px;
+    background: url(assets/dog-topdown.png) 0 0 / 256px 64px;
+    image-rendering: pixelated;
+    animation: trot 0.55s steps(4) infinite;
+  }
+  @keyframes trot { to { background-position: -256px 0; } }
+
+  #loader {
+    position: fixed; inset: 0; z-index: 40;
+    background: rgba(18, 16, 14, 0.82);
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; backdrop-filter: blur(2px);
+  }
+  #loader.on { display: flex; }
+  #loader .msg { font-size: 15px; opacity: 0.85; letter-spacing: 0.3px; }
+  #loader .dots::after {
+    content: ""; animation: dots 1.4s steps(4) infinite;
+  }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+
+  #zoom { display: flex; flex-direction: column; gap: 6px; }
+  #zoom .btn { width: 38px; text-align: center; font-size: 18px; line-height: 1; padding: 8px 0; }
+
   /* ---------- HUD ---------- */
   .hud { position: fixed; z-index: 20; pointer-events: none; }
   .hud > * { pointer-events: auto; }
@@ -186,9 +212,13 @@
     <div class="stat"><b id="s-explored">0%</b><span>explored</span></div>
     <div class="stat"><b id="s-treasure">0</b><span>found</span></div>
   </div>
-  <div style="display:flex;gap:8px;">
+  <div style="display:flex;gap:8px;align-items:flex-start;">
     <button class="btn" id="btn-walks">Walks</button>
     <button class="btn" id="btn-data">Load data</button>
+    <div id="zoom">
+      <button class="btn" id="btn-zoom-in" aria-label="Zoom in">+</button>
+      <button class="btn" id="btn-zoom-out" aria-label="Zoom out">&minus;</button>
+    </div>
   </div>
 </div>
 
@@ -230,8 +260,14 @@
   </div>
 </div>
 
+<div id="loader">
+  <div class="trotting"></div>
+  <div class="msg" id="loader-msg">Fetching the map<span class="dots"></span></div>
+</div>
+
 <div id="boot">
   <h1>🐾 A Walk With Your Dog</h1>
+  <div class="trotting"></div>
   <div class="sub">building the neighbourhood…</div>
   <div id="bar"><i></i></div>
 </div>
@@ -251,7 +287,7 @@
   var GRID_COLS = 28, GRID_ROWS = 16;   // coarse grid, only for the explored %
 
   var state = {
-    points: [], walks: [], bounds: null, territory: null, grid: null,
+    points: [], walks: [], bounds: null, territory: null, grid: null, activeWalk: -1,
     osmWays: null, dogName: "Your Dog"
   };
 
@@ -684,6 +720,16 @@
     tertiary: 1.05, secondary: 1.15, primary: 1.25
   };
 
+  // Half the carriageway, matching what the tiles draw. Zero means the way is
+  // itself the thing you walk on, so there is nothing to step aside from.
+  var WAY_HALF = {
+    footway: 0, path: 0, pedestrian: 0, steps: 0, cycleway: 0,
+    living_street: 3.0, residential: 3.0, unclassified: 3.0, service: 3.0,
+    tertiary: 3.0, secondary: 5.0, primary: 5.0
+  };
+
+  var SIDE_EVIDENCE_M = 5;   // lateral GPS offset below this proves nothing
+
   function buildWalkGraph(ways) {
     var nodes = [], adj = [], byKey = {};
     function nodeFor(id, lat, lng) {
@@ -694,17 +740,18 @@
       }
       return i;
     }
-    function link(a, b, cost) {
+    function link(a, b, cost, halfW) {
       if (a === b) return;
       var d = haversineKm(nodes[a], nodes[b]) * 1000;
-      adj[a].push([b, d * cost, d]);
-      adj[b].push([a, d * cost, d]);
+      adj[a].push([b, d * cost, d, halfW]);
+      adj[b].push([a, d * cost, d, halfW]);
     }
 
     (ways || []).forEach(function (w) {
       var t = w.tags || {};
       var cost = WALKABLE[t.highway];
       if (!cost) return;
+      var halfW = WAY_HALF[t.highway] || 0;
       var g = w.geometry;
       if (!g || g.length < 2) return;
       var ids = w.nodes || [];
@@ -721,11 +768,11 @@
             var f = s / steps;
             var mid = nodeFor(null, g[i - 1].lat + (g[i].lat - g[i - 1].lat) * f,
                                     g[i - 1].lon + (g[i].lon - g[i - 1].lon) * f);
-            link(last, mid, cost); last = mid;
+            link(last, mid, cost, halfW); last = mid;
           }
-          link(last, cur, cost);
+          link(last, cur, cost, halfW);
         } else {
-          link(prev, cur, cost);
+          link(prev, cur, cost, halfW);
         }
         prev = cur;
       }
@@ -806,14 +853,43 @@
       return path.reverse();
     }
 
-    return { nodes: nodes, nearest: nearest, route: route, size: nodes.length };
+    // half-width of the way joining two adjacent nodes; degree is 2-4, so a
+    // scan is cheaper than another index
+    function edgeHalf(a, b) {
+      var e = adj[a];
+      for (var i = 0; i < e.length; i++) if (e[i][0] === b) return e[i][3] || 0;
+      return 0;
+    }
+
+    return { nodes: nodes, nearest: nearest, route: route,
+             edgeHalf: edgeHalf, size: nodes.length };
+  }
+
+  // How far off the centreline the middle of the pavement sits. Mirrors what
+  // buildWorld draws, so the trail lands on the paving slabs rather than
+  // somewhere near them.
+  function pavementOffset(halfW, mpt) {
+    if (halfW <= 0) return 0;                       // a footpath is the pavement
+    return Math.max(halfW + 0.8, mpt * 1.05) + Math.max(2.4, mpt * 1.45) * 0.5;
+  }
+
+  // Metres left of the direction of travel that `pt` sits. Positive is left,
+  // which on a UK road is the traffic-with-you side.
+  function lateralM(pt, on, dLat, dLng, mLng) {
+    var ux = dLng * mLng, uy = dLat * 111320;
+    var len = Math.sqrt(ux * ux + uy * uy);
+    if (!len) return 0;
+    var vx = (pt.lng - on.lng) * mLng, vy = (pt.lat - on.lat) * 111320;
+    return (ux * vy - uy * vx) / len;
   }
 
   // Turn a sparse walk into a dense one that follows the streets, keeping each
   // original fix's timing: time is spread along the routed length, so the dog
-  // takes as long to get round the corner as the data says it did.
-  function routeWalk(walk, graph) {
+  // takes as long to get round the corner as the data says it did. Routed
+  // stretches are then stepped sideways onto the pavement.
+  function routeWalk(walk, graph, mpt) {
     if (!graph || graph.size < 8 || walk.length < 2) return walk;
+    mpt = mpt || 2;
 
     var snap = walk.map(function (p) {
       var s = graph.nearest(p.lat, p.lng);
@@ -821,25 +897,68 @@
     });
 
     var out = [];
+    // Which pavement he is on. The GPS usually knows — a fix sits to one side
+    // of the centreline — but a fix landing near the middle proves nothing, so
+    // the side is held until the data clearly says otherwise. Failing that,
+    // the British default: walk on the right, facing the oncoming traffic.
+    var side = -1;
+
     for (var i = 0; i < walk.length - 1; i++) {
       var a = walk[i], b = walk[i + 1];
       var straight = haversineKm(a, b) * 1000;
-      var mid = null;
+      var nodes = null;
       if (straight > ROUTE_MIN_M && snap[i] >= 0 && snap[i + 1] >= 0) {
         var path = graph.route(snap[i], snap[i + 1],
                                Math.max(180, straight * ROUTE_MAX_FACTOR));
-        if (path && path.length > 1) {
-          mid = path.map(function (n) {
-            return { lat: graph.nodes[n].lat, lng: graph.nodes[n].lng };
-          });
-        }
+        if (path && path.length > 1) nodes = path;
       }
 
-      var sub = [a].concat(mid || [], [b]);
-      // drop points that repeat, so the length maths stays sane
-      var clean = [sub[0]];
-      for (var s2 = 1; s2 < sub.length; s2++) {
-        if (haversineKm(clean[clean.length - 1], sub[s2]) * 1000 > 0.5) clean.push(sub[s2]);
+      var clean = [], halves = [];
+      if (nodes) {
+        // the snapped nodes stand in for the fixes: they are the same places,
+        // minus the metre or two of GPS wander
+        for (var n = 0; n < nodes.length; n++) {
+          var g = graph.nodes[nodes[n]];
+          if (clean.length && haversineKm(clean[clean.length - 1], g) * 1000 <= 0.5) continue;
+          clean.push({ lat: g.lat, lng: g.lng });
+          halves.push(n > 0 ? graph.edgeHalf(nodes[n - 1], nodes[n])
+                            : graph.edgeHalf(nodes[0], nodes[1]));
+        }
+
+        // Read the side off the fixes at each end of this stretch.
+        var mLng = 111320 * Math.cos(clean[0].lat * Math.PI / 180);
+        var ev = 0, nEv = 0;
+        [[a, 0, 1], [b, clean.length - 1, clean.length - 2]].forEach(function (probe) {
+          var here = clean[probe[1]], nxt = clean[probe[2]];
+          if (!here || !nxt || here === nxt) return;
+          var dLat = probe[1] < probe[2] ? nxt.lat - here.lat : here.lat - nxt.lat;
+          var dLng = probe[1] < probe[2] ? nxt.lng - here.lng : here.lng - nxt.lng;
+          ev += lateralM(probe[0], here, dLat, dLng, mLng); nEv++;
+        });
+        if (nEv) {
+          var mean = ev / nEv;
+          if (Math.abs(mean) > SIDE_EVIDENCE_M) side = mean > 0 ? 1 : -1;
+        }
+      } else {
+        clean = [a, b];
+        halves = [0, 0];
+      }
+      if (clean.length < 2) continue;
+
+      // step each vertex sideways, perpendicular to the local heading
+      if (nodes) {
+        var mLng2 = 111320 * Math.cos(clean[0].lat * Math.PI / 180);
+        var shifted = clean.map(function (p, k) {
+          var prev = clean[k - 1] || p, next = clean[k + 1] || p;
+          var ux = (next.lng - prev.lng) * mLng2, uy = (next.lat - prev.lat) * 111320;
+          var len = Math.sqrt(ux * ux + uy * uy);
+          if (!len) return { lat: p.lat, lng: p.lng };
+          var off = pavementOffset(halves[k], mpt) * side;
+          // left of travel is (-uy, ux) once normalised
+          return { lat: p.lat + (ux / len) * off / 111320,
+                   lng: p.lng + (uy / len) * -off / mLng2 };
+        });
+        clean = shifted;
       }
 
       var cum = [0], total = 0;
@@ -848,14 +967,23 @@
         cum.push(total);
       }
       var ta = new Date(a.t).getTime(), tb = new Date(b.t).getTime();
-      for (var k = 0; k < clean.length - 1; k++) {
-        var f2 = total > 0 ? cum[k] / total : 0;
-        out.push({ lat: clean[k].lat, lng: clean[k].lng,
+      for (var k2 = 0; k2 < clean.length - 1; k2++) {
+        var f2 = total > 0 ? cum[k2] / total : 0;
+        out.push({ lat: clean[k2].lat, lng: clean[k2].lng,
                    t: new Date(ta + (tb - ta) * f2).toISOString() });
       }
+      out.push({ lat: clean[clean.length - 1].lat, lng: clean[clean.length - 1].lng,
+                 t: new Date(tb).toISOString() });
     }
-    out.push(walk[walk.length - 1]);
-    return out;
+
+    // consecutive stretches share their join, so drop the repeats
+    var dedup = [];
+    out.forEach(function (p) {
+      var last = dedup[dedup.length - 1];
+      if (last && haversineKm(last, p) * 1000 <= 0.5) return;
+      dedup.push(p);
+    });
+    return dedup.length > 1 ? dedup : walk;
   }
 
   // Value noise on a coarse lattice, bilinearly sampled. Per-tile random
@@ -981,8 +1109,20 @@
     var VIS = 14;
     // Two rings, not one: the outer ring is drawn half-lit so the edge of what
     // the dog has seen fades out instead of ending on a hard rectangle.
+    //
+    // The walk being played is deliberately left out. Its ground starts dark
+    // and is uncovered as he actually reaches it — otherwise "explored" is a
+    // number that never moves while you watch. Everything he covered on the
+    // other walks stays lit, because he really has been there.
+    var active = state.activeWalk >= 0 ? state.walks[state.activeWalk] : null;
+    var activePts = null;
+    if (active) {
+      activePts = new Set();
+      active.forEach(function (p) { activePts.add(p.t + "|" + p.lat + "|" + p.lng); });
+    }
     var visited = {};
     state.points.forEach(function (pt) {
+      if (activePts && activePts.has(pt.t + "|" + pt.lat + "|" + pt.lng)) return;
       var m = toM(pt.lat, pt.lng);
       var cx = Math.floor(m.x / VIS), cy = Math.floor(m.y / VIS);
       for (var ox = -2; ox <= 2; ox++) {
@@ -1378,7 +1518,7 @@
     for (var si2 = 0; si2 < cols * rows; si2++) seen[si2] = visited[visIdx[si2]] || 0;
 
     world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen,
-              trees: trees, props: props, shadow: shadow,
+              trees: trees, props: props, shadow: shadow, vis: VIS,
               toM: toM, widthM: widthM, heightM: heightM };
     window.__world = world;
     return world;
@@ -1432,6 +1572,7 @@
 
 
   var game = null, scene = null;
+  var sceneReady = false, firstMapIn = false;
   var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0 };
 
   class BootScene extends Phaser.Scene {
@@ -1478,7 +1619,7 @@
 
       this.input.on("wheel", function (p, o, dx, dy) {
         var cam = this.cameras.main;
-        cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.85 : 1.18), 1, 6));
+        self.setZoom((self.targetZoom || cam.zoom) * (dy > 0 ? 0.85 : 1.18), false);
       }, this);
 
       // Full-screen grade, driven by the real time of day on the walk.
@@ -1498,8 +1639,8 @@
       this.scale.on("resize", this.fitOverlays, this);
       this.fitOverlays();
       this.setTimeOfDay(state.points.length ? state.points[0].t : null);
-
-      hideBoot();
+      sceneReady = true;
+      if (firstMapIn) hideBoot();
     }
 
     fitOverlays() {
@@ -1566,36 +1707,9 @@
       // as a checkerboard instead of a surface.
       var broad = makeNoise(w.cols, w.rows, 16, 11.3);
       var fine = makeNoise(w.cols, w.rows, 6, 47.9);
-      this.layer.forEachTile(function (tile) {
-        var n = broad(tile.x, tile.y) * 0.72 + fine(tile.x, tile.y) * 0.28;
-        var i = tile.index;
-        var fog = w.seen[tile.y * w.cols + tile.x];
-        if (fog === 0) {
-          // unwalked ground: dimmed in place, at tile resolution
-          tile.tint = mixHex(0x2e3440, 0x424a5a, n);
-          return;
-        }
-        var lit;
-        if (w.shadow[tile.y * w.cols + tile.x]) {
-          lit = mixHex(0x6e7382, 0x8e94a4, n);          // in the lee of a building
-        } else if (i >= TILE.wallBase) {
-          lit = mixHex(0xe6e6e6, 0xffffff, n);          // elevations self-shade
-        } else if (i === TILE.hedge) {
-          lit = mixHex(0xd0d4c8, 0xf4f8ec, n);          // hedges keep their own depth
-        } else if (i >= TILE.grass && i <= TILE.dirt) {
-          lit = mixHex(0xaab498, 0xdce4cc, n);          // mottled turf, Scottish not tropical
-        } else if (i <= TILE.zebraV) {
-          lit = mixHex(0xd0d2da, 0xeeeef6, n);          // wet, patched tarmac
-        } else if (i <= TILE.kerbE) {
-          lit = mixHex(0xdedcd6, 0xfcfcfa, n);
-        } else if (i === TILE.water) {
-          lit = mixHex(0xd2dcea, 0xffffff, n);
-        } else {
-          lit = mixHex(0xdcdcdc, 0xffffff, n * 0.6 + 0.4);   // roofs vary least
-        }
-        // half-lit outer ring, so the walked area has a soft edge
-        tile.tint = fog === 2 ? lit : mixHex(mixHex(0x2e3440, 0x424a5a, n), lit, 0.45);
-      });
+      this.broad = broad; this.fine = fine;
+      var self0 = this;
+      this.layer.forEachTile(function (tile) { self0.tintTile(tile, w); });
 
       this.treasureGroup = this.treasureGroup || this.add.group();
 
@@ -1603,11 +1717,17 @@
       var scale = TS / w.mpt;   // world metres -> pixels
 
       this.treeGroup = this.treeGroup || this.add.group();
+      // Trees and street furniture are drawn everywhere and shaded to match the
+      // ground, rather than skipped outside the walked area — leaving them out
+      // punched tree-shaped holes in the parts of town the dog missed.
+      var FOG_TINT = [0x8a92a4, 0xb4bac8, 0xffffff];
       w.trees.forEach(function (tr) {
         var tx = Math.floor(tr.x / w.mpt), ty2 = Math.floor(tr.y / w.mpt);
-        if (!w.seen[ty2 * w.cols + tx]) return;
-        self.treeGroup.add(self.add.image(tr.x * scale, tr.y * scale, "tiles", tr.t)
-          .setOrigin(0.5).setDepth(tr.y * scale));
+        var img = self.add.image(tr.x * scale, tr.y * scale, "tiles", tr.t)
+          .setOrigin(0.5).setDepth(tr.y * scale)
+          .setTint(FOG_TINT[w.seen[ty2 * w.cols + tx]]);
+        img.tileX = tx; img.tileY = ty2;
+        self.treeGroup.add(img);
       });
 
       // Street furniture sits below the trees but above the ground, and is
@@ -1615,12 +1735,11 @@
       this.propGroup = this.propGroup || this.add.group();
       w.props.forEach(function (pr) {
         var px2 = Math.floor(pr.x / w.mpt), py2 = Math.floor(pr.y / w.mpt);
-        var fog = w.seen[py2 * w.cols + px2];
-        if (!fog) return;
         var img = self.add.image(pr.x * scale, pr.y * scale, "props", pr.t)
-          .setOrigin(0.5).setDepth(pr.y * scale - 0.5);
+          .setOrigin(0.5).setDepth(pr.y * scale - 0.5)
+          .setTint(FOG_TINT[w.seen[py2 * w.cols + px2]]);
         if (pr.r) img.setRotation(pr.r);
-        if (fog === 1) img.setTint(0x8e94a4);
+        img.tileX = px2; img.tileY = py2;
         self.propGroup.add(img);
       });
 
@@ -1628,6 +1747,10 @@
       // sit along their road the way a street atlas letters them.
       this.labelGroup = this.labelGroup || this.add.group();
       w.labels.forEach(function (lb) {
+        // OSM hands back ways that only clip the corner of the request, so some
+        // names land outside the world. Invisible when zoomed in, but they
+        // speckle the margins once you pull all the way out.
+        if (lb.x < 0 || lb.y < 0 || lb.x > w.widthM || lb.y > w.heightM) return;
         var isArea = lb.kind === "area";
         var txt = self.add.text(lb.x * scale, lb.y * scale, lb.name.toUpperCase(), {
           fontFamily: "Baloo 2, system-ui, sans-serif",
@@ -1685,13 +1808,147 @@
       this.dog.setPosition(home.x * scale, home.y * scale);
 
       var cam = this.cameras.main;
-      cam.setBounds(0, 0, w.cols * TS, w.rows * TS);
-      cam.setZoom(3);
-      cam.centerOn(home.x * scale, home.y * scale);
-      cam.roundPixels = true;
-
-      this.worldScale = scale;
+      // Zoomed all the way out to begin with: the whole walk on screen at once,
+      // which is also the limit for zooming out, so you can never pull back
+      // past the edge of the world into empty space.
       this.worldRef = w;
+      this.fitZoom = this.zoomToFit(w);
+      this.setZoom(this.fitZoom, false);
+      cam.roundPixels = true;
+      this.worldScale = scale;
+    }
+
+    // One tile's colour, given how much of it the dog has seen. Pulled out of
+    // the build pass so the fog can be lifted a patch at a time as he walks.
+    tintTile(tile, w) {
+      var n = this.broad(tile.x, tile.y) * 0.72 + this.fine(tile.x, tile.y) * 0.28;
+      var i = tile.index;
+      var fog = w.seen[tile.y * w.cols + tile.x];
+      var dark = mixHex(0x7c8598, 0x929cb2, n);
+      if (fog === 0) {
+        // Ground the dog has not covered: shaded, not blacked out. A couple of
+        // real walks light a corridor through a world that is mostly everything
+        // else, so this has to read as overcast rather than as a hole.
+        tile.tint = dark;
+        return;
+      }
+      var lit;
+      if (w.shadow[tile.y * w.cols + tile.x]) {
+        lit = mixHex(0x6e7382, 0x8e94a4, n);          // in the lee of a building
+      } else if (i >= TILE.wallBase) {
+        lit = mixHex(0xe6e6e6, 0xffffff, n);          // elevations self-shade
+      } else if (i === TILE.hedge) {
+        lit = mixHex(0xd0d4c8, 0xf4f8ec, n);          // hedges keep their own depth
+      } else if (i >= TILE.grass && i <= TILE.dirt) {
+        lit = mixHex(0xaab498, 0xdce4cc, n);          // mottled turf, Scottish not tropical
+      } else if (i <= TILE.zebraV) {
+        lit = mixHex(0xd0d2da, 0xeeeef6, n);          // wet, patched tarmac
+      } else if (i <= TILE.kerbE) {
+        lit = mixHex(0xdedcd6, 0xfcfcfa, n);
+      } else if (i === TILE.water) {
+        lit = mixHex(0xd2dcea, 0xffffff, n);
+      } else {
+        lit = mixHex(0xdcdcdc, 0xffffff, n * 0.6 + 0.4);   // roofs vary least
+      }
+      // half-lit outer ring, so the walked area has a soft edge
+      tile.tint = fog === 2 ? lit : mixHex(dark, lit, 0.5);
+    }
+
+    // Uncover the ground around a point the dog has just reached. Only the
+    // tiles whose fog level actually changed are re-tinted, so this stays
+    // cheap enough to run while the walk plays.
+    revealAt(mx, my) {
+      var w = this.worldRef;
+      if (!w) return;
+      var r2 = Math.ceil((w.vis * 2) / w.mpt);
+      var cx = Math.round(mx / w.mpt - 0.5), cy = Math.round(my / w.mpt - 0.5);
+      var x0 = Math.max(0, cx - r2), x1 = Math.min(w.cols - 1, cx + r2);
+      var y0 = Math.max(0, cy - r2), y1 = Math.min(w.rows - 1, cy + r2);
+      var changed = false, minX = x1, maxX = x0, minY = y1, maxY = y0;
+      for (var y = y0; y <= y1; y++) {
+        for (var x = x0; x <= x1; x++) {
+          var dm = Math.hypot((x + 0.5) * w.mpt - mx, (y + 0.5) * w.mpt - my);
+          var lvl = dm <= w.vis * 1.1 ? 2 : (dm <= w.vis * 2.1 ? 1 : 0);
+          if (!lvl) continue;
+          var idx = y * w.cols + x;
+          if (w.seen[idx] >= lvl) continue;
+          w.seen[idx] = lvl;
+          var tile = this.layer.getTileAt(x, y);
+          if (tile) this.tintTile(tile, w);
+          changed = true;
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+      if (changed) this.retintSprites(w, minX, minY, maxX, maxY);
+    }
+
+    // Trees and street furniture carry the same shading as the ground beneath
+    // them, so they have to be brought up with it.
+    retintSprites(w, x0, y0, x1, y1) {
+      var FOG_TINT = [0x8a92a4, 0xb4bac8, 0xffffff];
+      var apply = function (spr) {
+        if (spr.tileX < x0 || spr.tileX > x1 || spr.tileY < y0 || spr.tileY > y1) return;
+        spr.setTint(FOG_TINT[w.seen[spr.tileY * w.cols + spr.tileX]]);
+      };
+      if (this.treeGroup) this.treeGroup.children.each(apply);
+      if (this.propGroup) this.propGroup.children.each(apply);
+    }
+
+    zoomToFit(w) {
+      var cam = this.cameras.main;
+      var fit = Math.min(cam.width / (w.cols * TS), cam.height / (w.rows * TS));
+      return Math.max(0.05, fit);
+    }
+
+    setZoom(z, animate) {
+      var cam = this.cameras.main;
+      var lo = this.fitZoom || 0.2;
+      var next = Phaser.Math.Clamp(z, lo, 8);
+      // Track the target separately: reading cam.zoom part-way through a tween
+      // gives an intermediate value, so stepping twice quickly would compound
+      // off whatever the animation happened to be showing.
+      this.targetZoom = next;
+      if (cam.zoomEffect && cam.zoomEffect.isRunning) cam.zoomEffect.reset();
+      // Bounds come off before the zoom so clamping cannot fight the tween,
+      // and the re-centre happens after it, when the new scale is in force.
+      this.applyBounds(next, false);
+      if (animate) {
+        cam.zoomTo(next, 180);
+        var self = this;
+        this.time.delayedCall(200, function () { self.applyBounds(next, true); });
+      } else {
+        cam.setZoom(next);
+        this.applyBounds(next, true);
+      }
+      return next;
+    }
+
+    // Camera bounds only make sense while the world is bigger than the screen.
+    // Once it fits, keeping them pins the map to the top-left corner, so they
+    // come off and the world is centred instead.
+    applyBounds(zoom, recentre) {
+      var cam = this.cameras.main, w = this.worldRef;
+      if (!w) return;
+      var wpx = w.cols * TS, hpx = w.rows * TS;
+      if (wpx * zoom <= cam.width + 1 || hpx * zoom <= cam.height + 1) {
+        cam.removeBounds();
+        if (recentre) cam.centerOn(wpx / 2, hpx / 2);
+      } else {
+        cam.setBounds(0, 0, wpx, hpx);
+      }
+    }
+
+    nudgeZoom(factor) {
+      // stepping out past the fit zoom means the walk no longer fills the view,
+      // so drop the follow and show the whole map again
+      var next = this.setZoom((this.targetZoom || this.cameras.main.zoom) * factor, true);
+      if (next <= (this.fitZoom || 0) * 1.02) {
+        this.cameras.main.stopFollow();
+        this.cameras.main.centerOn(this.worldRef.cols * TS / 2, this.worldRef.rows * TS / 2);
+      } else if (pb.playing && this.dog) {
+        this.cameras.main.startFollow(this.dog, true, 0.09, 0.09);
+      }
     }
 
     update(time, delta) {
@@ -1709,7 +1966,7 @@
       var d = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
       if (this.pinchDist && d > 0) {
         var cam = this.cameras.main;
-        cam.setZoom(Phaser.Math.Clamp(cam.zoom * (d / this.pinchDist), 1.5, 8));
+        this.setZoom(cam.zoom * (d / this.pinchDist), false);
       }
       this.pinchDist = d;
     }
@@ -1739,6 +1996,14 @@
       if (px < this.dog.x - 0.2) this.dog.setFlipX(true);
       else if (px > this.dog.x + 0.2) this.dog.setFlipX(false);
       this.dog.setPosition(px, py);
+
+      // uncover the ground he has just reached, but only every few metres —
+      // there is no point re-checking the same tiles sixty times a second
+      if (!this.lastReveal || Math.hypot(m.x - this.lastReveal.x, m.y - this.lastReveal.y) > w.vis * 0.4) {
+        this.lastReveal = { x: m.x, y: m.y };
+        this.revealAt(m.x, m.y);
+        markExplored(cur);
+      }
 
       // a soft shadow under the dog, so he reads against the grass
       this.dogGfx.clear();
@@ -1824,22 +2089,28 @@
       .map(function (v) { return v.toFixed(5); }).join(",");
   }
 
-  // Move the world to this walk's patch of the map, if it is not there already.
+  // Move the world to this walk's patch of the map and rebuild it. Resolves
+  // once the map data is actually in, so playback can wait for it rather than
+  // starting the dog off across blank ground.
   function focusWorldOn(walk) {
     var b = boundsForWalk(walk);
-    if (sameBounds(b, state.bounds) && state.osmWays) return;
-    state.bounds = b;
     var key = boundsKey(b);
-    state.osmWays = osmCache[key] || null;
-    if (scene) scene.buildLevel();
-    if (state.osmWays) return;
-    overpass(areaQuery(b)).then(function (ways) {
-      if (!ways || !ways.length) { toast("Map data unavailable — showing plain ground"); return; }
-      osmCache[key] = ways;
-      if (!sameBounds(b, state.bounds)) return;   // user moved on while it loaded
-      state.osmWays = ways;
+    if (!sameBounds(b, state.bounds)) {
+      state.bounds = b;
+      state.osmWays = osmCache[key] || null;
+    }
+    if (state.osmWays) {
       if (scene) scene.buildLevel();
-      refreshRoute();
+      return Promise.resolve();
+    }
+    return overpass(areaQuery(b)).then(function (ways) {
+      if (ways && ways.length && sameBounds(b, state.bounds)) {
+        osmCache[key] = ways;
+        state.osmWays = ways;
+      } else if (!ways || !ways.length) {
+        toast("Map data unavailable — showing plain ground");
+      }
+      if (scene) scene.buildLevel();
     });
   }
 
@@ -1856,7 +2127,7 @@
       walkGraph = buildWalkGraph(state.osmWays);
       walkGraphKey = boundsKey(state.bounds);
     }
-    var routed = routeWalk(walk, walkGraph);
+    var routed = routeWalk(walk, walkGraph, world ? world.mpt : 2);
     routeCache[key] = routed;
     return routed;
   }
@@ -1875,29 +2146,44 @@
   function startWalk(i) {
     var walk = state.walks[i];
     if (!walk || walk.length < 2) return;
-    focusWorldOn(walk);
+    pb.playing = false; pb.walk = null; pb.elapsed = 0;
     pb.index = i;
-    pb.walk = routedWalk(i);
-    pb.playing = true; pb.elapsed = 0;
-    // Paced off the walk's own clock, not its point count. A tracker reports
-    // every couple of minutes, so a 37-minute walk is barely a dozen fixes —
-    // scaling by point count played it in two minutes flat. A sixth of real
-    // time means the dog ambles; the speed buttons multiply up from here.
-    var realMs = new Date(walk[walk.length - 1].t) - new Date(walk[0].t);
-    pb.duration = Math.min(720000, Math.max(150000, realMs / 6));
-    document.getElementById("transport").classList.remove("off");
+    state.activeWalk = i;
     setPlayLabel();
     renderWalkList();
-    if (scene) {
-      scene.dog.play("trot");
-      scene.setWeather(seededRandom(new Date(walk[0].t).getDate() * 3.7) < 0.42);
-      scene.applyProgress(0);
-      scene.cameras.main.startFollow(scene.dog, true, 0.09, 0.09);
-    }
+    showLoader("Fetching the map");
+
+    focusWorldOn(walk).then(function () {
+      if (pb.index !== i) return;              // another walk was picked meanwhile
+      recomputeExplored();
+      pb.walk = routedWalk(i);
+      pb.elapsed = 0;
+      // Paced off the walk's own clock, not its point count. A tracker reports
+      // every couple of minutes, so a 37-minute walk is barely a dozen fixes —
+      // scaling by point count played it in two minutes flat. A sixth of real
+      // time means the dog ambles; the speed buttons multiply up from here.
+      var realMs = new Date(walk[walk.length - 1].t) - new Date(walk[0].t);
+      pb.duration = Math.min(720000, Math.max(150000, realMs / 6));
+      hideLoader();
+      document.getElementById("transport").classList.remove("off");
+      pb.playing = true;
+      setPlayLabel();
+      renderWalkList();
+      if (scene) {
+        scene.lastReveal = null;
+        scene.dog.play("trot");
+        scene.setWeather(seededRandom(new Date(walk[0].t).getDate() * 3.7) < 0.42);
+        scene.applyProgress(0);
+        scene.setZoom(3, true);
+        scene.cameras.main.startFollow(scene.dog, true, 0.09, 0.09);
+      }
+    });
   }
 
   function stopWalk() {
     pb.playing = false; pb.walk = null; pb.index = -1;
+    state.activeWalk = -1;
+    hideLoader();
     document.getElementById("transport").classList.add("off");
     if (scene) {
       scene.setWeather(false);
@@ -1920,6 +2206,43 @@
     t.classList.add("show");
     clearTimeout(toast._t);
     toast._t = setTimeout(function () { t.classList.remove("show"); }, 2600);
+  }
+
+  function showLoader(msg) {
+    document.getElementById("loader-msg").firstChild.nodeValue = msg;
+    document.getElementById("loader").classList.add("on");
+  }
+  function hideLoader() {
+    document.getElementById("loader").classList.remove("on");
+  }
+
+  // "Explored" counts the ground the dog has actually covered. The walk being
+  // played is left out of the starting figure and added back as he walks it,
+  // so the number moves while you watch instead of sitting still.
+  function recomputeExplored() {
+    if (!state.grid || !state.territory) return;
+    var active = state.activeWalk >= 0 ? state.walks[state.activeWalk] : null;
+    var skip = null;
+    if (active) {
+      skip = {};
+      active.forEach(function (p) { skip[p.t + "|" + p.lat + "|" + p.lng] = 1; });
+    }
+    state.grid.forEach(function (row) { row.forEach(function (c) { c.explored = false; }); });
+    state.points.forEach(function (p) {
+      if (skip && skip[p.t + "|" + p.lat + "|" + p.lng]) return;
+      var cell = pointToCell(p, state.territory);
+      state.grid[cell.row][cell.col].explored = true;
+    });
+    updateStats();
+  }
+
+  function markExplored(pt) {
+    if (!state.grid || !state.territory) return;
+    var cell = pointToCell(pt, state.territory);
+    var c = state.grid[cell.row][cell.col];
+    if (c.explored) return;
+    c.explored = true;
+    updateStats();
   }
 
   function hideBoot() {
@@ -1958,18 +2281,30 @@
   }
 
   // Refetch the map around whatever data is now loaded, then rebuild the level.
+  // The splash stays up until this lands, so the first thing anyone sees is a
+  // finished town rather than bare ground being furnished in front of them.
   function rebuildFromData() {
     var b = state.bounds;
-    if (scene) scene.buildLevel();
-    overpass(areaQuery(b)).then(function (ways) {
-      if (!ways || !ways.length) { toast("Map data unavailable — showing plain ground"); return; }
-      osmCache[boundsKey(b)] = ways;
-      if (!sameBounds(b, state.bounds)) return;
-      state.osmWays = ways;
+    return overpass(areaQuery(b)).then(function (ways) {
+      if (ways && ways.length && sameBounds(b, state.bounds)) {
+        osmCache[boundsKey(b)] = ways;
+        state.osmWays = ways;
+      } else if (!ways || !ways.length) {
+        toast("Map data unavailable — showing plain ground");
+      }
       if (scene) scene.buildLevel();
+      firstMapIn = true;
+      if (sceneReady) hideBoot();
       refreshRoute();
     });
   }
+
+  document.getElementById("btn-zoom-in").addEventListener("click", function () {
+    if (scene) scene.nudgeZoom(1.5);
+  });
+  document.getElementById("btn-zoom-out").addEventListener("click", function () {
+    if (scene) scene.nudgeZoom(1 / 1.5);
+  });
 
   document.getElementById("btn-walks").addEventListener("click", function () {
     document.getElementById("walks").classList.toggle("hidden");

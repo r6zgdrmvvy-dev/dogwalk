@@ -61,14 +61,34 @@ route more than three times the straight-line distance is rejected as wrong.
 Each original fix keeps its timestamp; the time between two fixes is spread
 along the routed length.
 
+Routed stretches are then stepped sideways onto the pavement rather than left
+down the middle of the carriageway. Which pavement is read off the GPS itself —
+a fix usually sits to one side of the centreline — and the side is held until
+the data clearly says otherwise, so noise cannot make the trail zigzag across
+the road. Where the fix proves nothing, the British default applies: walk on
+the right, facing the oncoming traffic.
+
 Routing makes walks measurably longer — the bundled Jul 25 walk goes from
-4.4 km to 5.4 km — because straight lines between sparse fixes always cut the
+4.4 km to 5.0 km — because straight lines between sparse fixes always cut the
 corners. The walk list shows the routed figure once the map for that area has
 loaded.
 
 Playback is paced off the walk's own clock, at a sixth of real time, capped at
 twelve minutes. Pacing it by point count (as an earlier version did) played a
 37-minute walk in two, because a real walk is barely a dozen fixes.
+
+### Exploring
+
+The map opens zoomed all the way out, showing the whole area at once; that is
+also the limit for zooming out, so you can never pull back into empty space.
+Zoom with the buttons, the wheel, or a pinch. Picking a walk waits for its map
+to arrive before the dog sets off — no starting him across bare ground — and
+zooms in to follow him.
+
+Ground the dog has not covered is shaded rather than blacked out. The walk you
+are watching starts dark and lifts as he actually reaches it, so "explored"
+moves while you watch; everything covered on the other walks stays lit, because
+he really has been there.
 
 ## Pulling real data from Tractive
 
