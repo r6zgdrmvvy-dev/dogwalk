@@ -24,21 +24,39 @@
     --ink: #4a3220;
     --shadow: rgba(74, 50, 32, 0.25);
 
-    /* Cozy farm-sim terrain palette (Stardew-ish), used for explored map tiles */
-    --z-field: #7cb64a;
-    --z-field-dark: #5c9636;
-    --z-park: #a3d666;
-    --z-park-dark: #85b84c;
-    --z-forest: #2f6b35;
-    --z-forest-dark: #1e4a22;
-    --z-water: #4a90d9;
-    --z-water-dark: #2f6bb3;
-    --z-road: #a97c50;
-    --z-road-dark: #8a6140;
-    --z-town: #dcb877;
-    --z-town-dark: #b8935a;
-    --z-bezel: #7a5738;
-    --z-bezel-dark: #4a3220;
+    /* Farm-sim terrain palette, sampled from a Stardew Valley screenshot */
+    --sv-sand: #edac23;
+    --sv-sand-dark: #d18a22;
+    --sv-soil: #b56f28;
+    --sv-grass: #5ea639;
+    --sv-grass-lite: #7cc23f;
+    --sv-grass-bright: #9ce137;
+    --sv-grass-deep: #10600e;
+    --sv-canopy: #0a7112;
+    --sv-canopy-lite: #12a022;
+    --sv-canopy-dark: #086614;
+    --sv-trunk: #aa6310;
+    --sv-wood: #d67a1d;
+    --sv-roof: #9e1f11;
+    --sv-water: #3a8fd4;
+    --sv-water-lite: #63b0ea;
+    --sv-water-dark: #2a6ba8;
+
+    /* UK street furniture: tarmac carriageway, concrete pavements either
+       side, and suburban housing (blonde sandstone / render, slate roofs)
+       rather than farmhouse timber. */
+    --uk-tarmac: #6f6f74;
+    --uk-tarmac-dark: #5a5a5f;
+    --uk-line: #d9d4c4;
+    --uk-pave: #b0aaa1;
+    --uk-pave-lite: #c4bfb6;
+    --uk-wall: #d9c9a4;
+    --uk-wall-alt: #b5654a;
+    --uk-slate: #5a5f66;
+    --sv-fog: #4b4a3a;
+    --sv-fog-dark: #403f31;
+    --z-bezel: #a2662c;
+    --z-bezel-dark: #6b3f18;
   }
 
   * { box-sizing: border-box; }
@@ -149,124 +167,62 @@
   .grid-wrap {
     position: relative;
     aspect-ratio: 14 / 8;
-    background: var(--z-bezel-dark);
-    border: 5px solid var(--z-bezel);
+    background: var(--sv-fog-dark);
+    border: 6px solid var(--z-bezel);
     box-shadow:
-      0 0 0 2px var(--z-bezel-dark),
-      inset 0 0 0 2px rgba(255, 216, 130, 0.5);
-    border-radius: 2px;
+      0 0 0 3px var(--z-bezel-dark),
+      inset 0 0 0 2px rgba(255, 216, 130, 0.35);
+    border-radius: 3px;
     overflow: hidden;
+  }
+
+  /* The map is drawn to a small canvas (TILE logical px per cell) and then
+     upscaled with image-rendering: pixelated. That is what actually gives
+     hard-edged chunky pixels — CSS gradients get resampled smoothly no
+     matter how the stops are placed, so real low-res sprites need a real
+     low-res raster. */
+  #map-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
     image-rendering: pixelated;
+    image-rendering: crisp-edges;
   }
 
-  .grid {
+  /* Emoji markers/treasures ride above the pixel map rather than being
+     baked into it, so they stay crisp and legible at any scale. */
+  #map-overlay {
     position: absolute;
     inset: 0;
-    display: grid;
-    grid-template-columns: repeat(28, 1fr);
-    gap: 1px;
-    background: var(--z-bezel-dark);
+    pointer-events: none;
   }
 
-  .cell {
-    position: relative;
-    background: var(--fog);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: clamp(6px, 0.9vw, 11px);
-    transition: background 0.4s ease;
-  }
-
-  .cell.unexplored {
-    background: repeating-linear-gradient(45deg, var(--fog), var(--fog) 6px, var(--fog-dark) 6px, var(--fog-dark) 12px);
-  }
-
-  .cell.explored {
-    background: var(--z-field);
-    animation: reveal 0.4s ease;
-  }
-
-  .cell.explored.terrain-park { background: var(--z-park); }
-  .cell.explored.terrain-forest {
-    background:
-      radial-gradient(circle at 30% 30%, var(--z-forest-dark) 0 18%, transparent 19%),
-      radial-gradient(circle at 70% 60%, var(--z-forest-dark) 0 18%, transparent 19%),
-      var(--z-forest);
-  }
-  .cell.explored.terrain-water {
-    background: repeating-linear-gradient(90deg, var(--z-water) 0 60%, var(--z-water-dark) 60% 100%);
-    background-size: 16px 100%;
-  }
-  .cell.explored.terrain-town {
-    background:
-      repeating-linear-gradient(0deg, var(--z-town-dark) 0 2px, transparent 2px 10px),
-      repeating-linear-gradient(90deg, var(--z-town-dark) 0 2px, transparent 2px 10px),
-      var(--z-town);
-    background-size: 10px 10px, 10px 10px, 100% 100%;
-  }
-
-  .cell.explored::after {
-    content: "";
+  .map-marker, .map-treasure {
     position: absolute;
-    inset: 0;
-    background: radial-gradient(circle, rgba(0,0,0,0.09) 1px, transparent 1.3px);
-    background-size: 7px 7px;
+    transform: translate(-50%, -50%);
+    line-height: 1;
   }
 
-  /* Streams are a thin real-world overlay, not a terrain type of their own —
-     see classifyTerrainFromWays(). Roads get the fuller connected-path
-     treatment below (built as child .road-seg elements in renderGrid()) so
-     streets actually read as streets rather than isolated diagonal ticks. */
-  .cell.has-stream::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    background: linear-gradient(45deg, transparent 46%, rgba(74, 144, 217, 0.85) 46%, rgba(74, 144, 217, 0.85) 54%, transparent 54%);
+  .map-marker {
+    font-size: clamp(13px, 2.1vw, 24px);
+    z-index: 3;
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,0.45));
   }
 
-  /* A connected dirt path: a hub square plus one arm per neighbouring road
-     cell, so adjoining "screens" visually link into a continuous street. */
-  .road-seg {
-    position: absolute;
-    background: var(--z-road);
-    box-shadow: inset 0 0 0 1px rgba(74, 48, 24, 0.25);
-    z-index: 1;
-  }
-  .road-seg.hub { top: 36%; left: 36%; width: 28%; height: 28%; border-radius: 1px; }
-  .road-seg.dir-n { top: -1px; left: 38%; width: 24%; height: 53%; }
-  .road-seg.dir-s { bottom: -1px; left: 38%; width: 24%; height: 53%; }
-  .road-seg.dir-e { right: -1px; top: 38%; width: 53%; height: 24%; }
-  .road-seg.dir-w { left: -1px; top: 38%; width: 53%; height: 24%; }
+  .map-marker.last { animation: bob 1.6s ease-in-out infinite; }
 
-  @keyframes reveal {
-    from { transform: scale(0.8); opacity: 0.4; }
-    to { transform: scale(1); opacity: 1; }
-  }
-
-  .cell .marker {
-    position: relative;
+  .map-treasure {
+    font-size: clamp(7px, 1.05vw, 12px);
     z-index: 2;
-    filter: drop-shadow(1px 1px 0 rgba(0,0,0,0.25));
+    filter: drop-shadow(0 1px 0 rgba(0,0,0,0.4));
   }
-
-  .cell.home .marker { font-size: 2.6em; }
-  .cell.last .marker { font-size: 2.2em; animation: bob 1.6s ease-in-out infinite; }
 
   @keyframes bob {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-3px); }
+    0%, 100% { transform: translate(-50%, -50%); }
+    50% { transform: translate(-50%, -64%); }
   }
-
-  .cell .treasure {
-    position: absolute;
-    bottom: 1px;
-    right: 1px;
-    font-size: 0.6em;
-    z-index: 1;
-  }
-
   .playback-overlay {
     position: absolute;
     inset: 0;
@@ -583,7 +539,8 @@
     <div class="layout">
       <div class="board-frame">
         <div class="grid-wrap">
-          <div class="grid" id="grid"></div>
+          <canvas id="map-canvas"></canvas>
+          <div id="map-overlay"></div>
           <div class="playback-overlay" id="playback-overlay" hidden>
             <svg id="playback-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
             <div class="dog-marker" id="dog-marker">🐕</div>
@@ -603,12 +560,12 @@
         <div class="legend">
           <span>🏡 home</span>
           <span>🐾 last spotted</span>
-          <span>🟩 field</span>
-          <span>🌲 forest</span>
-          <span>🏘️ town</span>
+          <span>🟩 grass</span>
+          <span>🌲 woodland</span>
+          <span>🏘️ houses</span>
           <span>🟦 water</span>
-          <span>🟨 road</span>
-          <span>〰️ stream</span>
+          <span>🛣️ road &amp; pavement</span>
+          <span>〰️ burn</span>
           <span>▦ unexplored</span>
         </div>
         <div class="terrain-status" id="terrain-status"></div>
@@ -990,7 +947,7 @@
     for (var r = 0; r < GRID_ROWS; r++) {
       var row = [];
       for (var c = 0; c < GRID_COLS; c++) {
-        row.push({ explored: false, treasure: null, terrain: "field", road: false, stream: false });
+        row.push({ explored: false, treasure: null, terrain: "field", road: false, roadMajor: false, stream: false });
       }
       grid.push(row);
     }
@@ -1024,7 +981,7 @@
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.openstreetmap.ru/api/interpreter"
   ];
-  var TERRAIN_CACHE_PREFIX = "dogwalk_terrain_v2_";
+  var TERRAIN_CACHE_PREFIX = "dogwalk_terrain_v3_";
   var TERRAIN_CACHE_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
   // Base tile types (mutually exclusive, one per cell). Roads and streams are
   // thin linear features almost every cell touches somewhere — treated as
@@ -1139,11 +1096,11 @@
   // trace through cells via their vertices instead, since that's how a thin
   // linear feature's path is actually represented.
   function classifyTerrainFromWays(ways, bounds) {
-    var terrain = [], road = [], stream = [];
+    var terrain = [], road = [], roadMajor = [], stream = [];
     for (var r = 0; r < GRID_ROWS; r++) {
-      var tRow = [], rRow = [], sRow = [];
-      for (var c = 0; c < GRID_COLS; c++) { tRow.push("field"); rRow.push(false); sRow.push(false); }
-      terrain.push(tRow); road.push(rRow); stream.push(sRow);
+      var tRow = [], rRow = [], mRow = [], sRow = [];
+      for (var c = 0; c < GRID_COLS; c++) { tRow.push("field"); rRow.push(false); mRow.push(false); sRow.push(false); }
+      terrain.push(tRow); road.push(rRow); roadMajor.push(mRow); stream.push(sRow);
     }
 
     function markCell(r, c, kind) {
@@ -1156,9 +1113,18 @@
       if (!kind) return;
 
       if (OVERLAY_KINDS[kind]) {
+        var hw = (way.tags || {}).highway;
+        var major = hw === "motorway" || hw === "trunk" || hw === "primary" ||
+                    hw === "secondary" || hw === "tertiary";
         way.geometry.forEach(function (pt) {
           var cell = pointToCellUnclamped(pt.lat, pt.lon, bounds);
-          if (cell) (kind === "road" ? road : stream)[cell.row][cell.col] = true;
+          if (!cell) return;
+          if (kind === "road") {
+            road[cell.row][cell.col] = true;
+            if (major) roadMajor[cell.row][cell.col] = true;
+          } else {
+            stream[cell.row][cell.col] = true;
+          }
         });
         return;
       }
@@ -1181,7 +1147,7 @@
       }
     });
 
-    return { terrain: terrain, road: road, stream: stream };
+    return { terrain: terrain, road: road, roadMajor: roadMajor, stream: stream };
   }
 
   function readTerrainCache(key) {
@@ -1260,6 +1226,8 @@
       for (var c = 0; c < GRID_COLS; c++) {
         state.grid[r][c].terrain = result.terrain[r][c];
         state.grid[r][c].road = result.road[r][c];
+        // roadMajor is absent in caches written before it existed
+        state.grid[r][c].roadMajor = !!(result.roadMajor && result.roadMajor[r][c]);
         state.grid[r][c].stream = result.stream[r][c];
       }
     }
@@ -1277,51 +1245,259 @@
     closePlayback();
   }
 
-  function renderGrid() {
-    var gridEl = document.getElementById("grid");
-    gridEl.innerHTML = "";
+  // ---------- pixel-art map renderer ----------
+  //
+  // Drawn to a canvas at TILE logical pixels per grid cell, then upscaled by
+  // CSS with image-rendering: pixelated. Sprites are authored as literal
+  // fillRect pixels at this tiny scale, which is what keeps edges hard when
+  // blown up rather than smoothly resampled.
+  //
+  // Camera is the usual JRPG/farm-sim 3/4 view: the ground plane (grass,
+  // roads, water) is seen from directly above, while props standing on it
+  // (houses, trees) are drawn face-on, so a house shows its roof and its
+  // front wall at the same time.
 
-    var homePoint = state.points[0];
-    var lastPoint = state.points[state.points.length - 1];
-    var homeCell = pointToCell(homePoint, state.bounds);
-    var lastCell = pointToCell(lastPoint, state.bounds);
+  var TILE = 16;
+  var ROAD_X0 = 5, ROAD_W = 6;   // 1px kerb + 4px carriageway + 1px kerb
 
-    for (var r = 0; r < GRID_ROWS; r++) {
-      for (var c = 0; c < GRID_COLS; c++) {
-        var g = state.grid[r][c];
-        var cellEl = document.createElement("div");
-        cellEl.className = "cell " + (g.explored ? "explored terrain-" + g.terrain : "unexplored");
-        if (g.explored && g.stream) cellEl.classList.add("has-stream");
+  var PAL = {
+    fog: "#41402f",
+    fogEdge: "#4b4a3a",
+    grass: "#5ea639",
+    grassLite: "#7cc23f",
+    grassBright: "#9ce137",
+    grassDeep: "#3f7d25",
+    parkGrass: "#7cc23f",
+    woodFloor: "#3f7d25",
+    water: "#3a8fd4",
+    waterLite: "#63b0ea",
+    waterDark: "#2a6ba8",
+    tarmac: "#6f6f74",
+    tarmacDark: "#5f5f64",
+    kerb: "#b0aaa1",
+    line: "#e6e0cd",
+    slate: "#5a5f66",
+    slateLite: "#767c85",
+    wallStone: "#d9c9a4",
+    wallBrick: "#b5654a",
+    door: "#6b4423",
+    window: "#9fd3e8",
+    canopy: "#0a7112",
+    canopyLite: "#12a022",
+    canopyDark: "#08600f",
+    trunk: "#8a5216",
+    pebble: "#cfc9bd",
+    flower: "#e8e3a0",
+  };
 
-        if (g.explored && g.road) {
-          cellEl.innerHTML += '<span class="road-seg hub"></span>';
-          var neighborRoad = function (nr, nc) {
-            return nr >= 0 && nr < GRID_ROWS && nc >= 0 && nc < GRID_COLS &&
-              state.grid[nr][nc].explored && state.grid[nr][nc].road;
-          };
-          if (neighborRoad(r - 1, c)) cellEl.innerHTML += '<span class="road-seg dir-n"></span>';
-          if (neighborRoad(r + 1, c)) cellEl.innerHTML += '<span class="road-seg dir-s"></span>';
-          if (neighborRoad(r, c + 1)) cellEl.innerHTML += '<span class="road-seg dir-e"></span>';
-          if (neighborRoad(r, c - 1)) cellEl.innerHTML += '<span class="road-seg dir-w"></span>';
-        }
+  function px(ctx, color, x, y, w, h) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, w, h);
+  }
 
-        var isHome = r === homeCell.row && c === homeCell.col;
-        var isLast = r === lastCell.row && c === lastCell.col;
+  // Face-on tree: rounded canopy with a highlight, sitting on a short trunk.
+  function drawTree(ctx, x, y) {
+    px(ctx, PAL.canopyDark, x + 1, y + 0, 6, 7);
+    px(ctx, PAL.canopyDark, x + 0, y + 1, 8, 5);
+    px(ctx, PAL.canopy,     x + 1, y + 1, 6, 5);
+    px(ctx, PAL.canopyLite, x + 2, y + 1, 2, 2);
+    px(ctx, PAL.trunk,      x + 3, y + 6, 2, 3);
+  }
 
-        if (isHome) {
-          cellEl.classList.add("home");
-          cellEl.innerHTML += '<span class="marker">🏡</span>';
-        } else if (isLast) {
-          cellEl.classList.add("last");
-          cellEl.innerHTML += '<span class="marker">🐾</span>';
-        }
+  // Face-on cottage: pitched roof stepped down in rows (so it reads as a
+  // roof plane), then the front wall with windows and a door.
+  function drawHouse(ctx, x, y, brick) {
+    px(ctx, PAL.slate,     x + 3, y + 0, 2, 1);
+    px(ctx, PAL.slate,     x + 2, y + 1, 4, 1);
+    px(ctx, PAL.slateLite, x + 1, y + 2, 6, 1);
+    px(ctx, PAL.slate,     x + 0, y + 3, 8, 1);
+    px(ctx, brick ? PAL.wallBrick : PAL.wallStone, x + 1, y + 4, 6, 5);
+    px(ctx, PAL.window,    x + 2, y + 5, 1, 1);
+    px(ctx, PAL.window,    x + 5, y + 5, 1, 1);
+    px(ctx, PAL.door,      x + 3, y + 6, 2, 3);
+  }
 
-        if (g.explored && g.treasure && !isHome && !isLast) {
-          cellEl.innerHTML += '<span class="treasure">' + g.treasure + '</span>';
-        }
+  function drawGroundTile(ctx, gx, gy, cell, idx) {
+    if (!cell.explored) {
+      px(ctx, PAL.fog, gx, gy, TILE, TILE);
+      if ((idx * 7) % 5 === 0) px(ctx, PAL.fogEdge, gx + 3, gy + 4, 2, 2);
+      return;
+    }
 
-        gridEl.appendChild(cellEl);
+    var base = PAL.grass;
+    if (cell.terrain === "park") base = PAL.parkGrass;
+    else if (cell.terrain === "forest") base = PAL.woodFloor;
+    else if (cell.terrain === "water") base = PAL.water;
+    px(ctx, base, gx, gy, TILE, TILE);
+
+    if (cell.terrain === "water") {
+      var wy = Math.floor(seededRandom(idx * 3.3) * (TILE - 4));
+      px(ctx, PAL.waterLite, gx + 2, gy + wy, 5, 1);
+      px(ctx, PAL.waterDark, gx + 8, gy + ((wy + 6) % (TILE - 2)), 4, 1);
+      return;
+    }
+
+    // grass tufts: a few hard-edged specks, positioned per-cell so the
+    // ground doesn't visibly repeat one stamp across the map
+    var t1x = Math.floor(seededRandom(idx * 3.31) * (TILE - 3));
+    var t1y = Math.floor(seededRandom(idx * 5.77) * (TILE - 3));
+    var t2x = Math.floor(seededRandom(idx * 7.13) * (TILE - 3));
+    var t2y = Math.floor(seededRandom(idx * 9.41) * (TILE - 3));
+    px(ctx, PAL.grassBright, gx + t1x, gy + t1y, 2, 1);
+    px(ctx, PAL.grassDeep,   gx + t2x, gy + t2y, 1, 2);
+  }
+
+  function drawRoadTile(ctx, gx, gy, r, c) {
+    var g = state.grid[r][c];
+    var major = g.roadMajor;
+    var x0 = major ? ROAD_X0 - 1 : ROAD_X0;
+    var w = major ? ROAD_W + 2 : ROAD_W;
+
+    function isRoad(nr, nc) {
+      return nr >= 0 && nr < GRID_ROWS && nc >= 0 && nc < GRID_COLS &&
+        state.grid[nr][nc].explored && state.grid[nr][nc].road;
+    }
+
+    // Each arm is a pavement band with the tarmac carriageway inset inside
+    // it, so the kerb lines run continuously along both sides of the street.
+    function arm(bx, by, bw, bh, horizontal) {
+      px(ctx, PAL.kerb, gx + bx, gy + by, bw, bh);
+      if (horizontal) px(ctx, PAL.tarmac, gx + bx, gy + by + 1, bw, bh - 2);
+      else px(ctx, PAL.tarmac, gx + bx + 1, gy + by, bw - 2, bh);
+    }
+
+    var far = TILE - x0 - w; // distance from the arm's far edge to the tile edge
+
+    if (isRoad(r - 1, c)) arm(x0, 0, w, x0 + w, false);
+    if (isRoad(r + 1, c)) arm(x0, x0, w, w + far, false);
+    if (isRoad(r, c - 1)) arm(0, x0, x0 + w, w, true);
+    if (isRoad(r, c + 1)) arm(x0, x0, w + far, w, true);
+
+    // junction hub, drawn last so arms meet cleanly in the middle
+    px(ctx, PAL.kerb, gx + x0, gy + x0, w, w);
+    px(ctx, PAL.tarmac, gx + x0 + 1, gy + x0 + 1, w - 2, w - 2);
+
+    // dashed centre line on the bigger through-roads
+    if (major) {
+      var mid = x0 + Math.floor(w / 2);
+      if (isRoad(r, c - 1) || isRoad(r, c + 1)) {
+        for (var lx = 1; lx < TILE; lx += 4) px(ctx, PAL.line, gx + lx, gy + mid, 2, 1);
+      } else if (isRoad(r - 1, c) || isRoad(r + 1, c)) {
+        for (var ly = 1; ly < TILE; ly += 4) px(ctx, PAL.line, gx + mid, gy + ly, 1, 2);
       }
+    }
+  }
+
+  function drawStreamTile(ctx, gx, gy, idx) {
+    for (var i = 0; i < TILE; i += 2) {
+      var off = Math.floor(seededRandom((idx + i) * 2.7) * 2);
+      px(ctx, PAL.water, gx + i, gy + TILE - 2 - i + off, 2, 2);
+    }
+  }
+
+  function renderGrid() {
+    var canvas = document.getElementById("map-canvas");
+    var overlay = document.getElementById("map-overlay");
+    if (!canvas) return;
+
+    canvas.width = GRID_COLS * TILE;
+    canvas.height = GRID_ROWS * TILE;
+    var ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+
+    var r, c, idx, g;
+
+    // pass 1 — ground plane, seen from directly above
+    for (r = 0; r < GRID_ROWS; r++) {
+      for (c = 0; c < GRID_COLS; c++) {
+        idx = r * GRID_COLS + c;
+        drawGroundTile(ctx, c * TILE, r * TILE, state.grid[r][c], idx);
+      }
+    }
+
+    // pass 2 — streams, then roads (both lie flat on the ground plane)
+    for (r = 0; r < GRID_ROWS; r++) {
+      for (c = 0; c < GRID_COLS; c++) {
+        g = state.grid[r][c];
+        if (!g.explored) continue;
+        idx = r * GRID_COLS + c;
+        if (g.stream) drawStreamTile(ctx, c * TILE, r * TILE, idx);
+      }
+    }
+    for (r = 0; r < GRID_ROWS; r++) {
+      for (c = 0; c < GRID_COLS; c++) {
+        g = state.grid[r][c];
+        if (g.explored && g.road) drawRoadTile(ctx, c * TILE, r * TILE, r, c);
+      }
+    }
+
+    // pass 3 — upright props, drawn top row first so nearer ones overlap
+    // the ones behind them, the way a 3/4 camera stacks sprites.
+    //
+    // Props go in the tile corners because the road runs through the middle
+    // of the tile; a centred building would be bisected by its own street.
+    var QUADS = [[0, 0], [TILE - 8, 0], [0, TILE - 9], [TILE - 8, TILE - 9]];
+    for (r = 0; r < GRID_ROWS; r++) {
+      for (c = 0; c < GRID_COLS; c++) {
+        g = state.grid[r][c];
+        if (!g.explored) continue;
+        idx = r * GRID_COLS + c;
+        var gx = c * TILE, gy = r * TILE;
+        var q = function (n) { return QUADS[Math.floor(seededRandom(n) * 4) % 4]; };
+
+        if (g.terrain === "forest") {
+          var q1 = q(idx * 2.1), q2 = q(idx * 4.3);
+          drawTree(ctx, gx + q1[0], gy + q1[1]);
+          drawTree(ctx, gx + q2[0], gy + q2[1]);
+        } else if (g.terrain === "town") {
+          var qh = q(idx * 3.1);
+          drawHouse(ctx, gx + qh[0], gy + qh[1], seededRandom(idx * 8.8) > 0.5);
+          if (seededRandom(idx * 10.4) > 0.4) {
+            var qh2 = q(idx * 11.9);
+            drawHouse(ctx, gx + qh2[0], gy + qh2[1], seededRandom(idx * 9.2) > 0.5);
+          }
+          if (seededRandom(idx * 12.6) > 0.6) {
+            var qt = q(idx * 14.2);
+            drawTree(ctx, gx + qt[0], gy + qt[1]);
+          }
+        } else if (g.terrain === "park" && seededRandom(idx * 5.1) > 0.45) {
+          var qp = q(idx * 5.5);
+          drawTree(ctx, gx + qp[0], gy + qp[1]);
+        } else if (g.terrain === "field" && seededRandom(idx * 6.8) > 0.72) {
+          var qf = q(idx * 7.2);
+          drawTree(ctx, gx + qf[0], gy + qf[1]);
+        }
+
+        if (g.terrain !== "water" && !g.road && seededRandom(idx * 11.3) > 0.7) {
+          var sx = Math.floor(seededRandom(idx * 15.1) * (TILE - 2));
+          var sy = Math.floor(seededRandom(idx * 17.3) * (TILE - 2));
+          px(ctx, seededRandom(idx * 13.7) > 0.5 ? PAL.pebble : PAL.flower, gx + sx, gy + sy, 1, 1);
+        }
+      }
+    }
+
+    // overlay — emoji markers and treasures, kept out of the raster so they
+    // stay legible instead of turning into 8-pixel mush
+    overlay.innerHTML = "";
+    var homeCell = pointToCell(state.points[0], state.bounds);
+    var lastCell = pointToCell(state.points[state.points.length - 1], state.bounds);
+    var pos = function (row, col) {
+      return "left:" + (((col + 0.5) / GRID_COLS) * 100).toFixed(3) + "%;top:" +
+        (((row + 0.5) / GRID_ROWS) * 100).toFixed(3) + "%";
+    };
+
+    for (r = 0; r < GRID_ROWS; r++) {
+      for (c = 0; c < GRID_COLS; c++) {
+        g = state.grid[r][c];
+        if (!g.explored || !g.treasure) continue;
+        if (r === homeCell.row && c === homeCell.col) continue;
+        if (r === lastCell.row && c === lastCell.col) continue;
+        overlay.innerHTML += '<span class="map-treasure" style="' + pos(r, c) + '">' + g.treasure + '</span>';
+      }
+    }
+    overlay.innerHTML += '<span class="map-marker" style="' + pos(homeCell.row, homeCell.col) + '">🏡</span>';
+    if (lastCell.row !== homeCell.row || lastCell.col !== homeCell.col) {
+      overlay.innerHTML += '<span class="map-marker last" style="' + pos(lastCell.row, lastCell.col) + '">🐾</span>';
     }
   }
 
