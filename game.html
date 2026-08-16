@@ -670,6 +670,17 @@
       }
     });
 
+    // Buildings cast onto the street. A top-down scene with no shadow at
+    // all reads as a flat diagram rather than a place with height.
+    var shadow = new Uint8Array(cols * rows);
+    for (var sy2 = 1; sy2 < rows; sy2++) {
+      for (var sx2 = 1; sx2 < cols; sx2++) {
+        var si3 = sy2 * cols + sx2;
+        if (kindMap[si3] === 4) continue;
+        if (kindMap[si3 - cols - 1] === 4) shadow[si3] = 1;
+      }
+    }
+
     var trees = [];
     for (var tyy = 0; tyy < rows; tyy++) {
       for (var txx = 0; txx < cols; txx++) {
@@ -685,7 +696,7 @@
     var seen = new Uint8Array(cols * rows);
     for (var si2 = 0; si2 < cols * rows; si2++) seen[si2] = visited[visIdx[si2]] ? 1 : 0;
 
-    world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen, trees: trees,
+    world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen, trees: trees, shadow: shadow,
               toM: toM, widthM: widthM, heightM: heightM };
     return world;
   }
@@ -743,7 +754,63 @@
         cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.85 : 1.18), 1, 6));
       }, this);
 
+      // Full-screen grade, driven by the real time of day on the walk.
+      this.grade = this.add.rectangle(0, 0, 10, 10, 0xffffff)
+        .setOrigin(0).setScrollFactor(0).setDepth(400000)
+        .setBlendMode(Phaser.BlendModes.MULTIPLY);
+
+      var rg = this.make.graphics({ add: false });
+      rg.fillStyle(0xbcd2e8, 1); rg.fillRect(0, 0, 1, 8);
+      rg.generateTexture("raindrop", 1, 8); rg.destroy();
+      this.rain = null;
+
+      this.scale.on("resize", this.fitOverlays, this);
+      this.fitOverlays();
+      this.setTimeOfDay(state.points.length ? state.points[0].t : null);
+
       hideBoot();
+    }
+
+    fitOverlays() {
+      if (!this.grade) return;
+      this.grade.setSize(this.scale.width, this.scale.height);
+      if (this.rain) this.rain.setPosition(0, 0);
+    }
+
+    // Warm and low at dawn, flat at midday, amber then blue into the
+    // evening. The hour comes from the walk's own timestamps.
+    setTimeOfDay(iso) {
+      if (!this.grade) return;
+      var h = iso ? new Date(iso).getHours() + new Date(iso).getMinutes() / 60 : 12;
+      var stops = [
+        [0,  0x5a6b96], [5,  0x6d7a9e], [7,  0xb9a894], [9,  0xf0ead8],
+        [13, 0xffffff], [16, 0xf4e4c4], [18, 0xd8b48c], [20, 0x8290b4],
+        [22, 0x5a6b96], [24, 0x5a6b96]
+      ];
+      var a = stops[0], b2 = stops[stops.length - 1];
+      for (var i = 0; i < stops.length - 1; i++) {
+        if (h >= stops[i][0] && h <= stops[i + 1][0]) { a = stops[i]; b2 = stops[i + 1]; break; }
+      }
+      var t = b2[0] === a[0] ? 0 : (h - a[0]) / (b2[0] - a[0]);
+      this.grade.fillColor = mixHex(a[1], b2[1], t);
+    }
+
+    setWeather(wet) {
+      if (wet && !this.rain) {
+        this.rain = this.add.particles(0, 0, "raindrop", {
+          x: { min: -80, max: this.scale.width + 80 },
+          y: -20,
+          lifespan: 1100,
+          speedY: { min: 620, max: 820 },
+          speedX: { min: -110, max: -60 },
+          quantity: 3,
+          alpha: { start: 0.42, end: 0.08 },
+          scaleY: { min: 0.7, max: 1.5 }
+        }).setScrollFactor(0).setDepth(399000);
+      } else if (!wet && this.rain) {
+        this.rain.destroy();
+        this.rain = null;
+      }
     }
 
     // Rebuilt whenever the walk data changes.
@@ -770,6 +837,10 @@
         if (!w.seen[tile.y * w.cols + tile.x]) {
           // unwalked ground: dimmed in place, at tile resolution
           tile.tint = mixHex(0x2e3440, 0x424a5a, n);
+          return;
+        }
+        if (w.shadow[tile.y * w.cols + tile.x]) {
+          tile.tint = mixHex(0x6e7382, 0x8e94a4, n);   // in the lee of a building
           return;
         }
         if (i === TILE.grass || i === TILE.waste) {
@@ -904,6 +975,7 @@
         break;
       }
       travelled = travelled.concat([cur]);
+      this.setTimeOfDay(cur.t);          // light follows the walk's own clock
 
       var m = w.toM(cur.lat, cur.lng);
       var px = m.x * scale, py = m.y * scale;
@@ -996,6 +1068,7 @@
     renderWalkList();
     if (scene) {
       scene.dog.play("trot");
+      scene.setWeather(seededRandom(new Date(walk[0].t).getDate() * 3.7) < 0.42);
       scene.applyProgress(0);
       scene.cameras.main.startFollow(scene.dog, true, 0.09, 0.09);
     }
@@ -1005,6 +1078,8 @@
     pb.playing = false; pb.walk = null; pb.index = -1;
     document.getElementById("transport").classList.add("off");
     if (scene) {
+      scene.setWeather(false);
+      scene.setTimeOfDay(state.points.length ? state.points[0].t : null);
       scene.cameras.main.stopFollow();
       scene.liveGfx.clear();
       scene.dogGfx.clear();
