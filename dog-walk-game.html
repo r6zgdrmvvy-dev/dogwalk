@@ -24,21 +24,21 @@
     --ink: #4a3220;
     --shadow: rgba(74, 50, 32, 0.25);
 
-    /* NES-Zelda-overworld terrain palette, used for explored map tiles */
-    --z-field: #4aa42e;
-    --z-field-dark: #3a8322;
-    --z-park: #7ec850;
-    --z-park-dark: #63a63b;
-    --z-forest: #1f6b2c;
-    --z-forest-dark: #144d1f;
-    --z-water: #3a6fd8;
-    --z-water-dark: #274ea3;
-    --z-road: #c9a24a;
-    --z-road-dark: #a9843a;
-    --z-town: #d9b877;
-    --z-town-dark: #b4915a;
-    --z-bezel: #6b4a30;
-    --z-bezel-dark: #3a2515;
+    /* Cozy farm-sim terrain palette (Stardew-ish), used for explored map tiles */
+    --z-field: #7cb64a;
+    --z-field-dark: #5c9636;
+    --z-park: #a3d666;
+    --z-park-dark: #85b84c;
+    --z-forest: #2f6b35;
+    --z-forest-dark: #1e4a22;
+    --z-water: #4a90d9;
+    --z-water-dark: #2f6bb3;
+    --z-road: #a97c50;
+    --z-road-dark: #8a6140;
+    --z-town: #dcb877;
+    --z-town-dark: #b8935a;
+    --z-bezel: #7a5738;
+    --z-bezel-dark: #4a3220;
   }
 
   * { box-sizing: border-box; }
@@ -65,11 +65,10 @@
   }
 
   header h1 {
-    font-family: 'Press Start 2P', 'Baloo 2', cursive;
-    font-size: clamp(16px, 3.4vw, 28px);
+    font-family: 'Baloo 2', cursive;
+    font-size: clamp(28px, 5vw, 44px);
     color: var(--brown-dark);
-    margin: 0 0 12px;
-    line-height: 1.6;
+    margin: 0 0 6px;
     text-shadow: 2px 2px 0 rgba(255,255,255,0.5);
   }
 
@@ -199,11 +198,6 @@
     background: repeating-linear-gradient(90deg, var(--z-water) 0 60%, var(--z-water-dark) 60% 100%);
     background-size: 16px 100%;
   }
-  .cell.explored.terrain-road {
-    background:
-      linear-gradient(90deg, transparent 44%, var(--z-road-dark) 44% 56%, transparent 56%),
-      var(--z-field);
-  }
   .cell.explored.terrain-town {
     background:
       repeating-linear-gradient(0deg, var(--z-town-dark) 0 2px, transparent 2px 10px),
@@ -216,33 +210,35 @@
     content: "";
     position: absolute;
     inset: 0;
-    background: repeating-linear-gradient(90deg, transparent, transparent 8px, rgba(0,0,0,0.05) 8px, rgba(0,0,0,0.05) 16px);
+    background: radial-gradient(circle, rgba(0,0,0,0.09) 1px, transparent 1.3px);
+    background-size: 7px 7px;
   }
 
-  /* Roads and streams are thin real-world features overlaid on the base terrain tile,
-     rather than a terrain type of their own — see classifyTerrainFromWays(). */
-  .cell.has-road::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(135deg, transparent 46%, rgba(201, 162, 74, 0.9) 46%, rgba(201, 162, 74, 0.9) 54%, transparent 54%);
-  }
-
+  /* Streams are a thin real-world overlay, not a terrain type of their own —
+     see classifyTerrainFromWays(). Roads get the fuller connected-path
+     treatment below (built as child .road-seg elements in renderGrid()) so
+     streets actually read as streets rather than isolated diagonal ticks. */
   .cell.has-stream::before {
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(45deg, transparent 46%, rgba(58, 111, 216, 0.85) 46%, rgba(58, 111, 216, 0.85) 54%, transparent 54%);
+    z-index: 1;
+    background: linear-gradient(45deg, transparent 46%, rgba(74, 144, 217, 0.85) 46%, rgba(74, 144, 217, 0.85) 54%, transparent 54%);
   }
 
-  .cell.has-road.has-stream::before {
-    content: "";
+  /* A connected dirt path: a hub square plus one arm per neighbouring road
+     cell, so adjoining "screens" visually link into a continuous street. */
+  .road-seg {
     position: absolute;
-    inset: 0;
-    background:
-      linear-gradient(135deg, transparent 46%, rgba(201, 162, 74, 0.9) 46%, rgba(201, 162, 74, 0.9) 54%, transparent 54%),
-      linear-gradient(45deg, transparent 46%, rgba(58, 111, 216, 0.85) 46%, rgba(58, 111, 216, 0.85) 54%, transparent 54%);
+    background: var(--z-road);
+    box-shadow: inset 0 0 0 1px rgba(74, 48, 24, 0.25);
+    z-index: 1;
   }
+  .road-seg.hub { top: 36%; left: 36%; width: 28%; height: 28%; border-radius: 1px; }
+  .road-seg.dir-n { top: -1px; left: 38%; width: 24%; height: 53%; }
+  .road-seg.dir-s { bottom: -1px; left: 38%; width: 24%; height: 53%; }
+  .road-seg.dir-e { right: -1px; top: 38%; width: 53%; height: 24%; }
+  .road-seg.dir-w { left: -1px; top: 38%; width: 53%; height: 24%; }
 
   @keyframes reveal {
     from { transform: scale(0.8); opacity: 0.4; }
@@ -1295,8 +1291,19 @@
         var g = state.grid[r][c];
         var cellEl = document.createElement("div");
         cellEl.className = "cell " + (g.explored ? "explored terrain-" + g.terrain : "unexplored");
-        if (g.explored && g.road) cellEl.classList.add("has-road");
         if (g.explored && g.stream) cellEl.classList.add("has-stream");
+
+        if (g.explored && g.road) {
+          cellEl.innerHTML += '<span class="road-seg hub"></span>';
+          var neighborRoad = function (nr, nc) {
+            return nr >= 0 && nr < GRID_ROWS && nc >= 0 && nc < GRID_COLS &&
+              state.grid[nr][nc].explored && state.grid[nr][nc].road;
+          };
+          if (neighborRoad(r - 1, c)) cellEl.innerHTML += '<span class="road-seg dir-n"></span>';
+          if (neighborRoad(r + 1, c)) cellEl.innerHTML += '<span class="road-seg dir-s"></span>';
+          if (neighborRoad(r, c + 1)) cellEl.innerHTML += '<span class="road-seg dir-e"></span>';
+          if (neighborRoad(r, c - 1)) cellEl.innerHTML += '<span class="road-seg dir-w"></span>';
+        }
 
         var isHome = r === homeCell.row && c === homeCell.col;
         var isLast = r === lastCell.row && c === lastCell.col;
