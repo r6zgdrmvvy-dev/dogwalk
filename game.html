@@ -84,7 +84,18 @@
     transform: translateX(0); transition: transform 0.25s ease;
   }
   #walks.hidden { transform: translateX(calc(-100% - 20px)); }
-  #walks h3 { margin: 2px 4px 8px; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.75; }
+  #walks h3 {
+    margin: 2px 4px 8px; font-size: 13px; letter-spacing: 0.06em;
+    text-transform: uppercase; opacity: 0.75;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+
+  .x-btn {
+    background: none; border: 2px solid var(--panel-edge); color: var(--ink);
+    border-radius: 8px; width: 30px; height: 30px; line-height: 1;
+    font-family: inherit; font-size: 14px; cursor: pointer; padding: 0; flex: none;
+  }
+  .x-btn:hover { border-color: var(--accent); }
   .walk {
     display: flex; justify-content: space-between; align-items: center; gap: 8px;
     padding: 7px 9px; border-radius: 8px; cursor: pointer; margin-bottom: 4px;
@@ -101,7 +112,7 @@
   }
   #transport.off { display: none; }
   #scrub { flex: 1; accent-color: var(--accent); }
-  #clock { font-size: 13px; min-width: 168px; text-align: right; opacity: 0.85; }
+  #clock { font-size: 13px; min-width: 168px; text-align: right; opacity: 0.85; white-space: nowrap; }
   .speed { display: flex; gap: 3px; }
   .speed .btn { padding: 5px 8px; font-size: 12px; }
   .speed .btn.on { background: var(--accent); color: #2a1c0a; border-color: var(--accent-dark); }
@@ -136,18 +147,32 @@
   input[type=file] { display: none; }
 
   @media (max-width: 720px) {
-    #hud-top { padding: 8px; }
-    .stat { min-width: 0; padding: 5px 8px; }
-    .stat b { font-size: 15px; }
-    .stat span { font-size: 9px; }
-    .btn { padding: 9px 12px; }          /* fingers, not cursors */
+    #hud-top { padding: 6px; gap: 6px; }
+    .stats { gap: 5px; }
+    .stat { min-width: 0; padding: 4px 7px; border-radius: 8px; }
+    .stat b { font-size: 14px; }
+    .stat span { font-size: 8px; letter-spacing: 0.04em; }
+    .btn { padding: 8px 10px; font-size: 13px; }
 
-    #hud-bottom { flex-direction: column; align-items: stretch; padding: 8px; gap: 8px; }
-    #walks { width: auto; max-height: 30vh; }
-    #transport { max-width: none; flex-wrap: wrap; }
-    #scrub { min-width: 120px; height: 26px; }
-    #clock { min-width: 0; flex: 1; text-align: left; font-size: 12px; }
+    /* Both overlays are dismissible and capped, so the map is never buried. */
+    #hud-bottom { flex-direction: column; align-items: stretch; padding: 6px; gap: 6px; }
+    #walks { width: auto; max-height: 24vh; padding: 6px; }
+    #walks h3 { margin-bottom: 5px; }
+    .walk { padding: 6px 8px; }
+    .walk .d { font-size: 12px; }
+    .walk .m { font-size: 10px; }
+
+    #transport { max-width: none; flex-wrap: nowrap; gap: 5px; padding: 6px; }
+    #transport .btn { padding: 8px 9px; font-size: 12px; }
+    .speed .btn { padding: 7px 6px; font-size: 11px; }
+    #scrub { min-width: 60px; height: 24px; }
+    #clock { display: none; }              /* the walk list already dates it */
   }
+
+  @media (max-width: 420px) {
+    .speed { display: none; }              /* no room; 1x is the default anyway */
+  }
+
 </style>
 </head>
 <body>
@@ -168,7 +193,10 @@
 </div>
 
 <div class="hud" id="hud-bottom">
-  <div id="walks"><h3>Walks</h3><div id="walk-list"></div></div>
+  <div id="walks">
+    <h3>Walks <button class="x-btn" id="btn-walks-close" aria-label="Close walks">✕</button></h3>
+    <div id="walk-list"></div>
+  </div>
   <div id="transport" class="off">
     <button class="btn primary" id="btn-play">Pause</button>
     <input type="range" id="scrub" min="0" max="1000" value="0">
@@ -439,12 +467,13 @@
   // Generated city tileset (assets/city.png). Pure top-down, GTA-London
   // grubby: soot tarmac, concrete pavement, brick and lead rooftops.
   var TILE = {
-    asphalt: 0, dashH: 1, dashV: 2,
-    pave: 3, kerb: 4,
-    grass: 5, waste: 6,
-    // five roof colours, each an (interior, edge) pair from index 7
-    roofPairs: [[7, 8], [9, 10], [11, 12], [13, 14], [15, 16]],
-    trees: [17, 18]
+    asphalt: 0, dashH: 1, dashV: 2, drain: 3,
+    pave: 4, kerb: 5,
+    grass: 6, waste: 7,
+    trees: [8, 9],
+    // Each roof colour is five tiles: interior, then a gutter edge facing
+    // north / south / west / east, so a roofline reads as a roofline.
+    roofBase: 10, roofStride: 5, roofCount: 4
   };
 
   var world = null;
@@ -650,7 +679,8 @@
         if (kk === 1) {
           // centre line only down the middle of the bigger roads
           var mid = majorMap[ii] && (seed % 5 === 0);
-          line.push(mid ? (alongH[ii] ? TILE.dashH : TILE.dashV) : TILE.asphalt);
+          line.push(mid ? (alongH[ii] ? TILE.dashH : TILE.dashV)
+                        : (seed % 53 === 0 ? TILE.drain : TILE.asphalt));
         } else if (kk === 2) {
           var nextToRoad =
             (x > 0 && kindMap[ii - 1] === 1) || (x < cols - 1 && kindMap[ii + 1] === 1) ||
@@ -662,15 +692,16 @@
           var fp = footprint[ii];
           var bid = fp >= 0 ? Math.abs(fp * 2654435761)
                             : Math.abs((bCellX[ii] * 92837) ^ (bCellY[ii] * 689287));
-          var pair = TILE.roofPairs[bid % TILE.roofPairs.length];
-          var sameCell = function (j) {
-            if (j < 0 || j >= cols * rows || kindMap[j] !== 4) return false;
+          var sameCell = function (j, gx2, gy2) {
+            if (gx2 < 0 || gx2 >= cols || gy2 < 0 || gy2 >= rows) return false;
+            if (kindMap[j] !== 4) return false;
             if (fp >= 0 || footprint[j] >= 0) return footprint[j] === fp;
             return bCellX[j] === bCellX[ii] && bCellY[j] === bCellY[ii];
           };
-          var edge = !(x > 0 && sameCell(ii - 1)) || !(x < cols - 1 && sameCell(ii + 1)) ||
-                     !(y > 0 && sameCell(ii - cols)) || !(y < rows - 1 && sameCell(ii + cols));
-          line.push(edge ? pair[1] : pair[0]);
+          var bN = sameCell(ii - cols, x, y - 1), bS = sameCell(ii + cols, x, y + 1);
+          var bW = sameCell(ii - 1, x - 1, y),    bE = sameCell(ii + 1, x + 1, y);
+          var rb = TILE.roofBase + (bid % TILE.roofCount) * TILE.roofStride;
+          line.push(!bN ? rb + 1 : (!bS ? rb + 2 : (!bW ? rb + 3 : (!bE ? rb + 4 : rb))));
         } else {
           line.push(seededRandom(seed % 7919) < 0.7 ? TILE.waste : TILE.grass);
         }
@@ -933,7 +964,7 @@
         }
         if (i === TILE.grass || i === TILE.waste) {
           tile.tint = mixHex(0xa8b49c, 0xffffff, n);        // mottled turf
-        } else if (i === TILE.asphalt || i === TILE.dashH || i === TILE.dashV) {
+        } else if (i === TILE.asphalt || i === TILE.dashH || i === TILE.dashV || i === TILE.drain) {
           tile.tint = mixHex(0xc8c8cc, 0xffffff, n);        // wet, patched tarmac
         } else if (i === TILE.pave || i === TILE.kerb) {
           tile.tint = mixHex(0xd8d6d0, 0xffffff, n);
@@ -1234,6 +1265,9 @@
   document.getElementById("btn-walks").addEventListener("click", function () {
     document.getElementById("walks").classList.toggle("hidden");
   });
+  document.getElementById("btn-walks-close").addEventListener("click", function () {
+    document.getElementById("walks").classList.add("hidden");
+  });
   document.getElementById("btn-data").addEventListener("click", function () {
     document.getElementById("data-panel").classList.add("open");
   });
@@ -1313,6 +1347,10 @@
     pipeline: GradeFX ? { GradeFX: GradeFX } : undefined,
     scene: [BootScene, WorldScene]
   });
+
+  if (window.matchMedia("(max-width: 720px)").matches) {
+    document.getElementById("walks").classList.add("hidden");
+  }
 
   startDemo(false);
 })();
