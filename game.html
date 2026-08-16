@@ -630,7 +630,7 @@
 
     preload() {
       var bar = document.querySelector("#bar i");
-      this.load.spritesheet("tiles", "assets/tiny-town.png", { frameWidth: TS, frameHeight: TS });
+      this.load.spritesheet("tiles", "assets/tiny-town-glasgow.png", { frameWidth: TS, frameHeight: TS });
       this.load.spritesheet("dog", "assets/dog.png", { frameWidth: 16, frameHeight: 16 });
       this.load.on("progress", function (v) { bar.style.width = Math.round(v * 100) + "%"; });
     }
@@ -646,7 +646,7 @@
       this.anims.create({
         key: "trot",
         frames: this.anims.generateFrameNumbers("dog", { start: 0, end: 3 }),
-        frameRate: 8, repeat: -1
+        frameRate: 6, repeat: -1
       });
       this.anims.create({
         key: "sit",
@@ -745,7 +745,7 @@
       // faint record of every walk
       this.trailGfx = this.trailGfx || this.add.graphics().setDepth(80000);
       this.trailGfx.clear();
-      this.trailGfx.lineStyle(2, 0x3a2c18, 0.35);
+      this.trailGfx.lineStyle(1, 0x2a2418, 0.18);   // faint; it is history, not a route to follow
       state.walks.forEach(function (walk) {
         self.trailGfx.beginPath();
         walk.forEach(function (pt, i) {
@@ -764,6 +764,9 @@
         this.dog = this.add.sprite(0, 0, "dog").setOrigin(0.5, 0.9);
         this.dog.play("sit");
       }
+      this.dogGfx = this.dogGfx || this.add.graphics();
+      this.dogGfx.setDepth(99999);
+      this.dogGfx.clear();
       this.dog.setDepth(100000);
 
       var home = w.toM(state.points[0].lat, state.points[0].lng);
@@ -771,7 +774,7 @@
 
       var cam = this.cameras.main;
       cam.setBounds(0, 0, w.cols * TS, w.rows * TS);
-      cam.setZoom(3);
+      cam.setZoom(4);
       cam.centerOn(home.x * scale, home.y * scale);
       cam.roundPixels = true;
 
@@ -811,7 +814,11 @@
       if (px < this.dog.x - 0.2) this.dog.setFlipX(true);
       else if (px > this.dog.x + 0.2) this.dog.setFlipX(false);
       this.dog.setPosition(px, py);
-      this.cameras.main.pan(px, py, 120, "Linear", true);
+
+      // a soft shadow under the dog, so he reads against the grass
+      this.dogGfx.clear();
+      this.dogGfx.fillStyle(0x000000, 0.28);
+      this.dogGfx.fillEllipse(px, py + 1, 13, 5);
 
       this.liveGfx.clear();
       this.liveGfx.lineStyle(2, 0xe8a33d, 0.95);
@@ -884,17 +891,29 @@
     var walk = state.walks[i];
     if (!walk || walk.length < 2) return;
     pb.walk = walk; pb.index = i; pb.playing = true; pb.elapsed = 0;
-    pb.duration = Math.min(40000, Math.max(9000, walk.length * 200));
+    // Roughly a real-time-ish amble: fast enough to watch a whole walk,
+    // slow enough to actually follow the dog. 1x is the slow one; the
+    // speed buttons multiply from here.
+    pb.duration = Math.min(180000, Math.max(35000, walk.length * 750));
     document.getElementById("transport").classList.remove("off");
     setPlayLabel();
     renderWalkList();
-    if (scene) { scene.dog.play("trot"); scene.applyProgress(0); }
+    if (scene) {
+      scene.dog.play("trot");
+      scene.applyProgress(0);
+      scene.cameras.main.startFollow(scene.dog, true, 0.09, 0.09);
+    }
   }
 
   function stopWalk() {
     pb.playing = false; pb.walk = null; pb.index = -1;
     document.getElementById("transport").classList.add("off");
-    if (scene) { scene.liveGfx.clear(); scene.dog.play("sit"); }
+    if (scene) {
+      scene.cameras.main.stopFollow();
+      scene.liveGfx.clear();
+      scene.dogGfx.clear();
+      scene.dog.play("sit");
+    }
     renderWalkList();
   }
 
