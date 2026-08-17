@@ -8,8 +8,9 @@ a scattered treasure along the way.
 ## Play it
 
 Open `game.html` in a browser. No build step, no server. It ships with two of
-Guinness's real walks around Giffnock — a wander through Rouken Glen and a
-morning round the streets — so there is something true to watch on first load.
+Guinness's real walks around Giffnock — a Saturday morning round the streets
+and a Thursday teatime one, at different times of day so the light differs
+between them — so there is something true to watch on first load.
 "Load data" replaces them with your own dog's.
 
 Set your dog's name at the top, then load real data either by pasting JSON
