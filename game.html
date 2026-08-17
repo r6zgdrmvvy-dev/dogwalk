@@ -63,6 +63,9 @@
   }
   #loader.on { display: flex; }
   #loader .msg { font-size: 15px; opacity: 0.85; letter-spacing: 0.3px; }
+  #bar2 { width: 200px; height: 8px; border: 2px solid var(--panel-edge); border-radius: 6px; overflow: hidden; }
+  #bar2 i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.2s ease; }
+  .pct { font-variant-numeric: tabular-nums; font-size: 13px; opacity: 0.7; letter-spacing: 1px; }
   #loader .dots::after {
     content: ""; animation: dots 1.4s steps(4) infinite;
   }
@@ -263,13 +266,16 @@
 <div id="loader">
   <div class="trotting"></div>
   <div class="msg" id="loader-msg">Fetching the map<span class="dots"></span></div>
+  <div id="bar2"><i></i></div>
+  <div class="pct" id="loader-pct">0%</div>
 </div>
 
 <div id="boot">
   <h1>🐾 A Walk With Your Dog</h1>
   <div class="trotting"></div>
-  <div class="sub">building the neighbourhood…</div>
+  <div class="sub" id="boot-sub">starting up…</div>
   <div id="bar"><i></i></div>
+  <div class="pct" id="boot-pct">0%</div>
 </div>
 
 <script src="vendor/phaser.min.js"></script>
@@ -503,17 +509,47 @@
     "https://overpass.openstreetmap.ru/api/interpreter"
   ];
 
-  function overpass(query) {
+  // `onBytes(received, total)` is called as the response streams in. Overpass
+  // does not always send a Content-Length, so total may be 0 — callers report
+  // what they can rather than inventing a denominator.
+  function overpass(query, onBytes) {
+    var read = function (r) {
+      if (!r.body || !onBytes) return r.json();
+      var total = Number(r.headers.get("content-length")) || 0;
+      var reader = r.body.getReader(), parts = [], got = 0;
+      return (function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) {
+            var buf = new Uint8Array(got), at = 0;
+            parts.forEach(function (c) { buf.set(c, at); at += c.length; });
+            return JSON.parse(new TextDecoder().decode(buf));
+          }
+          parts.push(res.value); got += res.value.length;
+          onBytes(got, total);
+          return pump();
+        });
+      })();
+    };
     var attempt = function (i) {
       if (i >= OVERPASS.length) return Promise.resolve(null);
       var ctl = new AbortController();
-      var timer = setTimeout(function () { ctl.abort(); }, 12000);
+      var timer = setTimeout(function () { ctl.abort(); }, 20000);
       return fetch(OVERPASS[i], { method: "POST", body: "data=" + encodeURIComponent(query), signal: ctl.signal })
-        .then(function (r) { clearTimeout(timer); if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (r) { clearTimeout(timer); if (!r.ok) throw new Error(r.status); return read(r); })
         .then(function (d) { return d.elements || []; })
         .catch(function () { clearTimeout(timer); return attempt(i + 1); });
     };
     return attempt(0);
+  }
+
+  // Map-fetch progress across a band. With a Content-Length this is the real
+  // fraction; without one it eases toward the top of the band on bytes received,
+  // which at least moves in step with something real.
+  function fetchProgress(lo, hi) {
+    return function (got, total) {
+      var f = total > 0 ? got / total : got / (got + 900000);
+      setProgress(lo + (hi - lo) * Math.min(1, f), "Fetching the map");
+    };
   }
 
   var WORLD_MARGIN_M = 140;      // ground drawn beyond the walked area
@@ -1086,6 +1122,12 @@
 
     var ROAD_HALF = 4.0, PAVE = 2.4, BLOCK_DEPTH = 34;
 
+    // Parks, water and landuse only. Buildings are the overwhelming majority of
+    // `areas` — a few thousand of them — and the park test below runs per tile,
+    // so walking the full list to skip them each time cost two thirds of the
+    // entire world build.
+    var softAreas = areas.filter(function (a) { return a.kind !== "building"; });
+
     var kindMap = new Uint8Array(cols * rows);   // 0 open, 1 road, 2 pave, 3 park, 4 building, 5 water, 6 footpath
     var parkMap = new Uint8Array(cols * rows);   // green that is public, not a back garden
     var majorMap = new Uint8Array(cols * rows);
@@ -1150,11 +1192,9 @@
         else if (bestSeg && !foot && best < half + paveW) kind = 2;
         else {
           var park = false, wet = false;
-          for (var ai = 0; ai < areas.length; ai++) {
-            var ak = areas[ai].kind;
-            if (ak === "building") continue;
-            if (!inArea(areas[ai], mx, my)) continue;
-            if (ak === "water") { wet = true; break; }
+          for (var ai = 0; ai < softAreas.length; ai++) {
+            if (!inArea(softAreas[ai], mx, my)) continue;
+            if (softAreas[ai].kind === "water") { wet = true; break; }
             park = true;
           }
           // City blocks fill the land fronting the streets; beyond that it
@@ -1563,18 +1603,17 @@
 
 
   var game = null, scene = null;
-  var sceneReady = false, firstMapIn = false;
+  var sceneReady = false, firstMapIn = false, mapFetchInFlight = false;
   var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0 };
 
   class BootScene extends Phaser.Scene {
     constructor() { super("boot"); }
 
     preload() {
-      var bar = document.querySelector("#bar i");
+      this.load.on("progress", function (v) { setProgress(v * 9, "Loading the art"); });
       this.load.spritesheet("tiles", "assets/city.png", { frameWidth: TS, frameHeight: TS });
       this.load.spritesheet("props", "assets/props.png", { frameWidth: PS, frameHeight: PS });
       this.load.spritesheet("dog", "assets/dog-topdown.png", { frameWidth: 16, frameHeight: 16 });
-      this.load.on("progress", function (v) { bar.style.width = Math.round(v * 100) + "%"; });
     }
 
     create() { this.scene.start("world"); }
@@ -1595,7 +1634,10 @@
         frames: this.anims.generateFrameNumbers("dog", { start: 0, end: 0 }),
         frameRate: 1, repeat: -1
       });
-      this.buildLevel();
+      // If the opening map request is still out, its own completion builds the
+      // world — building here as well would run two builds at once and send the
+      // progress bar to a hundred and then back down again.
+      if (!mapFetchInFlight) this.buildLevel(55, 100);
 
       this.input.addPointer(2);          // two-finger gestures
       this.pinchDist = null;
@@ -1676,8 +1718,21 @@
       }
     }
 
-    // Rebuilt whenever the walk data changes.
-    buildLevel() {
+    // Rebuilt whenever the walk data changes. Async so the browser can paint
+    // between stages: the whole thing is about a second of solid work, and run
+    // in one lump it froze the page and made any progress readout meaningless.
+    // A token guards against two builds overlapping — the newer one wins.
+    async buildLevel(lo, hi) {
+      lo = lo === undefined ? 55 : lo;
+      hi = hi === undefined ? 100 : hi;
+      var at = function (f, label) { setProgress(lo + (hi - lo) * f, label); };
+      var token = (this.buildToken = (this.buildToken || 0) + 1);
+      var stale = function () { return token !== this.buildToken; }.bind(this);
+
+      at(0, "Building the neighbourhood");
+      await yieldFrame();
+      if (stale()) return;
+
       if (this.layer) { this.layer.destroy(); this.layer = null; }
       if (this.labelGroup) this.labelGroup.clear(true, true);
       if (this.treeGroup) this.treeGroup.clear(true, true);
@@ -1686,6 +1741,11 @@
       if (this.treasureGroup) this.treasureGroup.clear(true, true);
 
       var w = buildWorld();
+      this.worldRef = w;
+      at(0.45, "Laying out the streets");
+      await yieldFrame();
+      if (stale()) return;
+
       var map = this.make.tilemap({ data: w.data, tileWidth: TS, tileHeight: TS });
       var tileset = map.addTilesetImage("tiles", "tiles", TS, TS, 0, 0);
       this.layer = map.createLayer(0, tileset, 0, 0);
@@ -1701,6 +1761,9 @@
       this.broad = broad; this.fine = fine;
       var self0 = this;
       this.layer.forEachTile(function (tile) { self0.tintTile(tile, w); });
+      at(0.55, "Planting the trees");
+      await yieldFrame();
+      if (stale()) return;
 
       this.treasureGroup = this.treasureGroup || this.add.group();
 
@@ -1712,27 +1775,48 @@
       // ground, rather than skipped outside the walked area — leaving them out
       // punched tree-shaped holes in the parts of town the dog missed.
       var FOG_TINT = [0x8a92a4, 0xb4bac8, 0xffffff];
-      w.trees.forEach(function (tr) {
-        var tx = Math.floor(tr.x / w.mpt), ty2 = Math.floor(tr.y / w.mpt);
-        var img = self.add.image(tr.x * scale, tr.y * scale, "tiles", tr.t)
-          .setOrigin(0.5).setDepth(tr.y * scale)
-          .setTint(FOG_TINT[w.seen[ty2 * w.cols + tx]]);
-        img.tileX = tx; img.tileY = ty2;
-        self.treeGroup.add(img);
-      });
+      // Ten thousand sprites is most of the build. Made in batches with a paint
+      // between them, so the bar advances while the town fills in.
+      var BATCH = 1200;
+      for (var ti2 = 0; ti2 < w.trees.length; ti2 += BATCH) {
+        var end = Math.min(ti2 + BATCH, w.trees.length);
+        for (var tj = ti2; tj < end; tj++) {
+          var tr = w.trees[tj];
+          var tx = Math.floor(tr.x / w.mpt), ty2 = Math.floor(tr.y / w.mpt);
+          var img = self.add.image(tr.x * scale, tr.y * scale, "tiles", tr.t)
+            .setOrigin(0.5).setDepth(tr.y * scale)
+            .setTint(FOG_TINT[w.seen[ty2 * w.cols + tx]]);
+          img.tileX = tx; img.tileY = ty2;
+          self.treeGroup.add(img);
+        }
+        at(0.55 + 0.3 * (end / Math.max(1, w.trees.length)), "Planting the trees");
+        await yieldFrame();
+        if (stale()) return;
+      }
 
       // Street furniture sits below the trees but above the ground, and is
       // dimmed to match wherever the dog has not been.
       this.propGroup = this.propGroup || this.add.group();
-      w.props.forEach(function (pr) {
-        var px2 = Math.floor(pr.x / w.mpt), py2 = Math.floor(pr.y / w.mpt);
-        var img = self.add.image(pr.x * scale, pr.y * scale, "props", pr.t)
-          .setOrigin(0.5).setDepth(pr.y * scale - 0.5)
-          .setTint(FOG_TINT[w.seen[py2 * w.cols + px2]]);
-        if (pr.r) img.setRotation(pr.r);
-        img.tileX = px2; img.tileY = py2;
-        self.propGroup.add(img);
-      });
+      for (var pi3 = 0; pi3 < w.props.length; pi3 += BATCH) {
+        var pend = Math.min(pi3 + BATCH, w.props.length);
+        for (var pj = pi3; pj < pend; pj++) {
+          var pr = w.props[pj];
+          var px2 = Math.floor(pr.x / w.mpt), py2 = Math.floor(pr.y / w.mpt);
+          var pimg = self.add.image(pr.x * scale, pr.y * scale, "props", pr.t)
+            .setOrigin(0.5).setDepth(pr.y * scale - 0.5)
+            .setTint(FOG_TINT[w.seen[py2 * w.cols + px2]]);
+          if (pr.r) pimg.setRotation(pr.r);
+          pimg.tileX = px2; pimg.tileY = py2;
+          self.propGroup.add(pimg);
+        }
+        at(0.85 + 0.08 * (pend / Math.max(1, w.props.length)), "Parking the cars");
+        await yieldFrame();
+        if (stale()) return;
+      }
+
+      at(0.93, "Naming the streets");
+      await yieldFrame();
+      if (stale()) return;
 
       // Street and park names, straight from the OSM name tags. Rotated to
       // sit along their road the way a street atlas letters them.
@@ -1807,6 +1891,7 @@
       this.setZoom(this.fitZoom, false);
       cam.roundPixels = true;
       this.worldScale = scale;
+      at(1, "Ready");
     }
 
     // One tile's colour, given how much of it the dog has seen. Pulled out of
@@ -2091,17 +2176,17 @@
       state.osmWays = osmCache[key] || null;
     }
     if (state.osmWays) {
-      if (scene) scene.buildLevel();
-      return Promise.resolve();
+      return scene ? scene.buildLevel(10, 100) : Promise.resolve();
     }
-    return overpass(areaQuery(b)).then(function (ways) {
+    setProgress(10, "Fetching the map");
+    return overpass(areaQuery(b), fetchProgress(10, 55)).then(function (ways) {
       if (ways && ways.length && sameBounds(b, state.bounds)) {
         osmCache[key] = ways;
         state.osmWays = ways;
       } else if (!ways || !ways.length) {
         toast("Map data unavailable — showing plain ground");
       }
-      if (scene) scene.buildLevel();
+      return scene ? scene.buildLevel(55, 100) : null;
     });
   }
 
@@ -2143,6 +2228,8 @@
     setPlayLabel();
     renderWalkList();
     showLoader("Fetching the map");
+    resetProgress();
+    setProgress(0, "Fetching the map");
 
     focusWorldOn(walk).then(function () {
       if (pb.index !== i) return;              // another walk was picked meanwhile
@@ -2197,6 +2284,40 @@
     t.classList.add("show");
     clearTimeout(toast._t);
     toast._t = setTimeout(function () { t.classList.remove("show"); }, 2600);
+  }
+
+  // One place that moves every progress readout, so the splash and the
+  // in-play loader can never disagree about how far along things are.
+  var progressAt = 0;
+  function resetProgress() { progressAt = -1; }
+  function setProgress(pct, label) {
+    pct = Math.max(0, Math.min(100, pct));
+    // Forward only. Asset loading, the map fetch and the world build all report
+    // independently and do not finish in a fixed order, and a bar that slips
+    // backwards reads as a bug even when nothing is wrong.
+    if (pct < progressAt) return;
+    progressAt = pct;
+    var txt = Math.round(pct) + "%";
+    ["#bar i", "#bar2 i"].forEach(function (sel) {
+      var el = document.querySelector(sel);
+      if (el) el.style.width = pct + "%";
+    });
+    ["boot-pct", "loader-pct"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = txt;
+    });
+    if (!label) return;
+    var sub = document.getElementById("boot-sub");
+    if (sub) sub.textContent = label;
+    var msg = document.getElementById("loader-msg");
+    if (msg && msg.firstChild) msg.firstChild.nodeValue = label;
+  }
+
+  // Let the browser paint between build stages. Without this the percentage
+  // would jump from nought to a hundred in one frozen lump, which is exactly
+  // what it looked like before.
+  function yieldFrame() {
+    return new Promise(function (r) { requestAnimationFrame(function () { r(); }); });
   }
 
   function showLoader(msg) {
@@ -2276,14 +2397,19 @@
   // finished town rather than bare ground being furnished in front of them.
   function rebuildFromData() {
     var b = state.bounds;
-    return overpass(areaQuery(b)).then(function (ways) {
+    resetProgress();
+    setProgress(10, "Fetching the map");
+    mapFetchInFlight = true;
+    return overpass(areaQuery(b), fetchProgress(10, 55)).then(function (ways) {
+      mapFetchInFlight = false;
       if (ways && ways.length && sameBounds(b, state.bounds)) {
         osmCache[boundsKey(b)] = ways;
         state.osmWays = ways;
       } else if (!ways || !ways.length) {
         toast("Map data unavailable — showing plain ground");
       }
-      if (scene) scene.buildLevel();
+      return scene ? scene.buildLevel(55, 100) : null;
+    }).then(function () {
       firstMapIn = true;
       if (sceneReady) hideBoot();
       refreshRoute();

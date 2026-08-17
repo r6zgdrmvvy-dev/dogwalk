@@ -99,6 +99,13 @@ Zoom with the buttons, the wheel, or a pinch. Picking a walk waits for its map
 to arrive before the dog sets off — no starting him across bare ground — and
 zooms in to follow him.
 
+Loading reports a real percentage across three phases: art assets, the map
+fetch (streamed, so the figure tracks bytes actually received) and the world
+build. The build runs in batches with a paint between them — it used to be one
+frozen second and a half, which is no use to a progress bar and no fun to sit
+through. Progress only ever moves forward, since the three phases report
+independently and do not finish in a fixed order.
+
 Ground the dog has not covered is shaded rather than blacked out. The walk you
 are watching starts dark and lifts as he actually reaches it, so "explored"
 moves while you watch; everything covered on the other walks stays lit, because
