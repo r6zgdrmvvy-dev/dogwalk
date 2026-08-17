@@ -71,6 +71,13 @@
   }
   @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
 
+  .field { display: block; font-size: 13px; opacity: 0.75; margin-bottom: 10px; }
+  .field input {
+    display: block; margin-top: 5px; width: 220px; max-width: 100%;
+    background: #14161a; color: var(--ink); border: 2px solid var(--panel-edge);
+    border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 14px;
+  }
+
   #zoom { display: flex; flex-direction: column; gap: 6px; }
   #zoom .btn { width: 38px; text-align: center; font-size: 18px; line-height: 1; padding: 8px 0; }
 
@@ -227,7 +234,7 @@
 
 <div class="hud" id="hud-bottom">
   <div id="walks">
-    <h3>Walks <button class="x-btn" id="btn-walks-close" aria-label="Close walks">✕</button></h3>
+    <h3><span id="walks-title">Walks</span> <button class="x-btn" id="btn-walks-close" aria-label="Close walks">✕</button></h3>
     <div id="walk-list"></div>
   </div>
   <div id="transport" class="off">
@@ -251,6 +258,9 @@
     <h2>Load walk data</h2>
     <p>Paste GPS points as <code>[{"lat":55.79,"lng":-4.29,"t":"2026-08-10T07:12:00Z"}]</code>,
        or load a <code>guinness_walk.json</code> exported by <code>scripts/export_tractive.py</code>.</p>
+    <label class="field">Your dog's name
+      <input type="text" id="dog-name" placeholder="Your Dog" maxlength="24">
+    </label>
     <textarea id="json-input" placeholder="Paste walk JSON here…"></textarea>
     <div class="row">
       <button class="btn primary" id="btn-load">Load pasted</button>
@@ -1603,7 +1613,23 @@
 
 
   var game = null, scene = null;
-  var sceneReady = false, firstMapIn = false, mapFetchInFlight = false;
+  var sceneReady = false, firstMapIn = false;
+
+  // Builds are queued, one at a time, and every request waits for the scene to
+  // exist first. Two faults came out of not doing this: overlapping builds
+  // abandoned each other half-finished, and a build asked for before Phaser had
+  // booted was quietly dropped — either way the camera went unconfigured and
+  // the progress bar stopped short of a hundred. Which one you hit depended on
+  // how fast the map request came back, so a warm cache hid it.
+  var sceneUp = null, sceneIsUp = null;
+  sceneUp = new Promise(function (res) { sceneIsUp = res; });
+  var buildChain = Promise.resolve();
+  function queueBuild(lo, hi) {
+    buildChain = buildChain
+      .then(function () { return sceneUp; })
+      .then(function () { return scene.buildLevel(lo, hi); });
+    return buildChain;
+  }
   var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0 };
 
   class BootScene extends Phaser.Scene {
@@ -1634,10 +1660,7 @@
         frames: this.anims.generateFrameNumbers("dog", { start: 0, end: 0 }),
         frameRate: 1, repeat: -1
       });
-      // If the opening map request is still out, its own completion builds the
-      // world — building here as well would run two builds at once and send the
-      // progress bar to a hundred and then back down again.
-      if (!mapFetchInFlight) this.buildLevel(55, 100);
+      sceneIsUp();          // releases any build queued before Phaser was ready
 
       this.input.addPointer(2);          // two-finger gestures
       this.pinchDist = null;
@@ -1839,13 +1862,31 @@
         self.labelGroup.add(txt);
       });
 
-      // treasures
+      // Treasures. The explored grid is 28x16 over the whole territory, so a
+      // cell is roughly a hundred metres across; dropping the find at the cell
+      // centre put acorns inside people's living rooms. Each one is nudged to a
+      // tile in its cell you could actually stand on.
+      var FINDABLE = {};
+      [TILE.grass, TILE.grassFlower, TILE.waste, TILE.dirt,
+       TILE.pave, TILE.paveB, TILE.drive].forEach(function (i) { FINDABLE[i] = 1; });
       for (var r3 = 0; r3 < GRID_ROWS; r3++) {
         for (var c3 = 0; c3 < GRID_COLS; c3++) {
           var cell = state.grid[r3][c3];
           if (!cell.explored || !cell.treasure) continue;
-          var tx = ((c3 + 0.5) / GRID_COLS) * w.cols * TS;
-          var ty = ((r3 + 0.5) / GRID_ROWS) * w.rows * TS;
+          var cx0 = Math.floor((c3 / GRID_COLS) * w.cols), cx1 = Math.ceil(((c3 + 1) / GRID_COLS) * w.cols);
+          var cy0 = Math.floor((r3 / GRID_ROWS) * w.rows), cy1 = Math.ceil(((r3 + 1) / GRID_ROWS) * w.rows);
+          var seed3 = Math.abs((c3 * 7919) ^ (r3 * 104729));
+          var bx = -1, by = -1, tries = 0;
+          while (tries < 60) {
+            var qx = cx0 + Math.floor(seededRandom(seed3 + tries * 3.3) * Math.max(1, cx1 - cx0));
+            var qy = cy0 + Math.floor(seededRandom(seed3 + tries * 7.7 + 1) * Math.max(1, cy1 - cy0));
+            tries++;
+            if (qx < 0 || qy < 0 || qx >= w.cols || qy >= w.rows) continue;
+            if (!FINDABLE[w.data[qy][qx]]) continue;
+            bx = qx; by = qy; break;
+          }
+          if (bx < 0) continue;                   // nowhere sensible in this cell
+          var tx = (bx + 0.5) * TS, ty = (by + 0.5) * TS;
           var t = this.add.text(tx, ty, cell.treasure, { fontSize: "13px" })
             .setOrigin(0.5).setDepth(ty + 1);
           this.treasureGroup.add(t);
@@ -1856,9 +1897,12 @@
       this.trailGfx = this.trailGfx || this.add.graphics().setDepth(80000);
       this.trailGfx.clear();
       this.trailGfx.lineStyle(1, 0x2a2418, 0.18);   // faint; it is history, not a route to follow
-      state.walks.forEach(function (walk) {
+      state.walks.forEach(function (walk, wi2) {
+        // Use the routed version where it has already been worked out, so the
+        // history does not cut through houses the live trail walks around.
+        var drawn = routedIfKnown(wi2) || walk;
         self.trailGfx.beginPath();
-        walk.forEach(function (pt, i) {
+        drawn.forEach(function (pt, i) {
           var m = w.toM(pt.lat, pt.lng);
           if (i === 0) self.trailGfx.moveTo(m.x * scale, m.y * scale);
           else self.trailGfx.lineTo(m.x * scale, m.y * scale);
@@ -1871,7 +1915,10 @@
 
       // the dog
       if (!this.dog) {
-        this.dog = this.add.sprite(0, 0, "dog").setOrigin(0.5, 0.9);
+        // Origin dead centre: this is a sprite seen from above, so there are no
+        // feet to stand on the spot. It was inherited from the old side-on
+        // sprite and drew him a few pixels north of where he really was.
+        this.dog = this.add.sprite(0, 0, "dog").setOrigin(0.5, 0.5);
         this.dog.play("sit");
       }
       this.dogGfx = this.dogGfx || this.add.graphics();
@@ -2069,9 +2116,24 @@
 
       var m = w.toM(cur.lat, cur.lng);
       var px = m.x * scale, py = m.y * scale;
-      if (px < this.dog.x - 0.2) this.dog.setFlipX(true);
-      else if (px > this.dog.x + 0.2) this.dog.setFlipX(false);
       this.dog.setPosition(px, py);
+
+      // Point him along his heading. Flipping east/west was all the old code
+      // did, so heading north he trotted sideways up the street. The direction
+      // is taken from a few metres back, not the last pair of points, which at
+      // this density are centimetres apart and would make him spin.
+      var back = null, acc = 0;
+      for (var bi = travelled.length - 1; bi > 0; bi--) {
+        acc += haversineKm(travelled[bi - 1], travelled[bi]) * 1000;
+        if (acc >= 4) { back = travelled[bi - 1]; break; }
+      }
+      if (back) {
+        var bm = w.toM(back.lat, back.lng);
+        var want = Math.atan2(m.y - bm.y, m.x - bm.x);   // art points east
+        var cr = this.dog.rotation;
+        var d = Phaser.Math.Angle.Wrap(want - cr);
+        this.dog.setRotation(cr + d * 0.25);             // ease, so corners turn
+      }
 
       // uncover the ground he has just reached, but only every few metres —
       // there is no point re-checking the same tiles sixty times a second
@@ -2176,7 +2238,7 @@
       state.osmWays = osmCache[key] || null;
     }
     if (state.osmWays) {
-      return scene ? scene.buildLevel(10, 100) : Promise.resolve();
+      return queueBuild(10, 100);
     }
     setProgress(10, "Fetching the map");
     return overpass(areaQuery(b), fetchProgress(10, 55)).then(function (ways) {
@@ -2186,12 +2248,19 @@
       } else if (!ways || !ways.length) {
         toast("Map data unavailable — showing plain ground");
       }
-      return scene ? scene.buildLevel(55, 100) : null;
+      return queueBuild(55, 100);
     });
   }
 
   // The routed version of each walk, once the map for its area has arrived.
   var routeCache = {};
+
+  // The routed path for a walk if it is already worked out, without paying to
+  // compute one — used by the faint history, which is not worth 62 Dijkstras.
+  function routedIfKnown(i) {
+    if (!state.osmWays) return null;
+    return routeCache[i + "@" + boundsKey(state.bounds)] || null;
+  }
 
   function routedWalk(i) {
     var walk = state.walks[i];
@@ -2320,6 +2389,49 @@
     return new Promise(function (r) { requestAnimationFrame(function () { r(); }); });
   }
 
+  // Keeping your own data across a reload. A month of fixes is a couple of
+  // hundred kilobytes, well inside the quota, but a bigger export could blow it
+  // — so a failure to save is reported and otherwise ignored.
+  var STORE_KEY = "dogwalk.v1";
+
+  function saveLocal() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        name: state.dogName, points: state.points
+      }));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function loadLocal() {
+    try {
+      var raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return null;
+      var d = JSON.parse(raw);
+      if (!d || !Array.isArray(d.points) || d.points.length < 3) return null;
+      return d;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function clearLocal() {
+    try { localStorage.removeItem(STORE_KEY); } catch (e) { /* nothing to do */ }
+  }
+
+  function applyDogName(name) {
+    state.dogName = (name || "").trim();
+    var shown = state.dogName || "Your Dog";
+    document.title = shown === "Your Dog" ? "A Walk With Your Dog"
+                                          : "A Walk With " + shown;
+    var wt = document.getElementById("walks-title");
+    if (wt) wt.textContent = state.dogName ? state.dogName + "'s walks" : "Walks";
+    var input = document.getElementById("dog-name");
+    if (input && input.value !== state.dogName) input.value = state.dogName;
+  }
+
   function showLoader(msg) {
     document.getElementById("loader-msg").firstChild.nodeValue = msg;
     document.getElementById("loader").classList.add("on");
@@ -2383,7 +2495,9 @@
       state.osmWays = null;
       routeCache = {};
       walkGraph = null; walkGraphKey = null;
-      setDataMsg("Loaded " + data.length + " points across " + state.walks.length + " walk(s).", true);
+      var kept = saveLocal();
+      setDataMsg("Loaded " + data.length + " points across " + state.walks.length + " walk(s)." +
+                 (kept ? " Saved for next time." : " Too big to save locally."), true);
       rebuildFromData();
       document.getElementById("data-panel").classList.remove("open");
       toast("Loaded " + state.walks.length + " walks");
@@ -2399,22 +2513,58 @@
     var b = state.bounds;
     resetProgress();
     setProgress(10, "Fetching the map");
-    mapFetchInFlight = true;
     return overpass(areaQuery(b), fetchProgress(10, 55)).then(function (ways) {
-      mapFetchInFlight = false;
       if (ways && ways.length && sameBounds(b, state.bounds)) {
         osmCache[boundsKey(b)] = ways;
         state.osmWays = ways;
       } else if (!ways || !ways.length) {
         toast("Map data unavailable — showing plain ground");
       }
-      return scene ? scene.buildLevel(55, 100) : null;
+      return queueBuild(55, 100);
     }).then(function () {
       firstMapIn = true;
       if (sceneReady) hideBoot();
       refreshRoute();
     });
   }
+
+  // Keyboard: space to play or pause, arrows to scrub or change speed, +/- to
+  // zoom, Escape to stop. Ignored while you are typing in a field.
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    var k = e.key;
+    if (k === " " || k === "k") {
+      if (!pb.walk) return;
+      e.preventDefault();
+      document.getElementById("btn-play").click();
+    } else if (k === "ArrowLeft" || k === "ArrowRight") {
+      if (!pb.walk) return;
+      e.preventDefault();
+      var step = (k === "ArrowRight" ? 1 : -1) * pb.duration * 0.05;
+      pb.elapsed = Math.max(0, Math.min(pb.duration, pb.elapsed + step));
+      if (scene) scene.applyProgress(pb.elapsed / pb.duration);
+    } else if (k === "ArrowUp" || k === "ArrowDown") {
+      var speeds = [0.5, 1, 2, 4];
+      var at = speeds.indexOf(pb.speed);
+      if (at < 0) at = 1;
+      var next = Math.max(0, Math.min(speeds.length - 1, at + (k === "ArrowUp" ? 1 : -1)));
+      e.preventDefault();
+      document.querySelector('#transport .speed .btn[data-speed="' + speeds[next] + '"]').click();
+    } else if (k === "+" || k === "=") {
+      if (scene) scene.nudgeZoom(1.5);
+    } else if (k === "-" || k === "_") {
+      if (scene) scene.nudgeZoom(1 / 1.5);
+    } else if (k === "Escape") {
+      if (pb.walk) stopWalk();
+      document.getElementById("data-panel").classList.remove("open");
+    }
+  });
+
+  document.getElementById("dog-name").addEventListener("input", function (e) {
+    applyDogName(e.target.value);
+    if (loadLocal()) saveLocal();          // only if there is already data to attach it to
+  });
 
   document.getElementById("btn-zoom-in").addEventListener("click", function () {
     if (scene) scene.nudgeZoom(1.5);
@@ -2483,6 +2633,7 @@
 
   function loadSampleWalks(force) {
     stopWalk();
+    if (force) clearLocal();
     var flat = [];
     SAMPLE_WALKS.forEach(function (w) { flat = flat.concat(w); });
     buildFromPoints(flat, SAMPLE_WALKS);
@@ -2507,7 +2658,17 @@
     document.getElementById("walks").classList.add("hidden");
   }
 
-  loadSampleWalks(false);
+  var saved = loadLocal();
+  if (saved) {
+    applyDogName(saved.name);
+    buildFromPoints(saved.points);
+    routeCache = {}; walkGraph = null; walkGraphKey = null;
+    rebuildFromData();
+    toast("Restored your saved walks");
+  } else {
+    applyDogName("");
+    loadSampleWalks(false);
+  }
 })();
 </script>
 </body>

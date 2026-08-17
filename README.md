@@ -11,12 +11,15 @@ Open `game.html` in a browser. No build step, no server. It ships with two of
 Guinness's real walks around Giffnock — a Saturday morning round the streets
 and a Thursday teatime one, at different times of day so the light differs
 between them — so there is something true to watch on first load.
-"Load data" replaces them with your own dog's.
 
-Set your dog's name at the top, then load real data either by pasting JSON
-into the "Load walk data" panel or by loading an exported `.json` file
-directly. Each walk in the "Walks" panel can be watched back with the ▶
-button — an animated playthrough of that day's route.
+Open "Load data" to set your dog's name and load your own walks, either by
+pasting JSON or by picking an exported `.json` file. What you load is kept in
+`localStorage`, so a reload brings your own walks back rather than the samples;
+"Reset to samples" forgets it again. Each walk in the walks panel plays back
+with the ▶ button.
+
+Keyboard: space plays and pauses, left/right scrub, up/down change speed,
+`+`/`-` zoom, Escape stops.
 
 Expected data shape — an array of GPS points:
 
@@ -137,8 +140,8 @@ what the API actually returned.
 
 ## Status / open items
 
-- No backend, no persistence — reloading the page resets to the bundled sample
-  walks unless you reload your exported file.
+- No backend. Your walks are kept in this browser's `localStorage` only —
+  nothing is uploaded, and nothing follows you to another device.
 - The bundled samples are real GPS trails. A walk trail is home-address
   adjacent data; swap them out before publishing your own copy if that matters
   to you.
@@ -177,6 +180,20 @@ about 4m long at native scale with its pixels still landing exactly on the
 ground's pixel grid. Nothing is drawn at a fractional scale, because that
 would put sprite pixels off the tile grid and break the pixel-art look.
 
-The older `dog-walk-game.html` build still uses Kenney's
-[Tiny Town](https://kenney.nl/assets/tiny-town) pack, released under Creative
-Commons Zero (CC0). Its licence text is in `ASSETS-LICENSE.txt`.
+An earlier build of this used Kenney's
+[Tiny Town](https://kenney.nl/assets/tiny-town) pack (CC0); it has been removed
+now that everything is generated, but the licence text stays in
+`ASSETS-LICENSE.txt` for the record.
+
+## Tests
+
+```bash
+npm install -D playwright && npx playwright install chromium
+node tests/smoke.js
+```
+
+Serves the repo, stubs Overpass with a small hand-written fixture so the run is
+offline, and checks the things that have actually broken before: the splash
+never clearing, walks not being found in a feed, playback not starting, the HUD
+panels trapping you on a phone, and silent page errors. It found two real faults
+the first time it ran.

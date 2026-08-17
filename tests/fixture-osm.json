@@ -1,0 +1,25 @@
+{
+  "version": 0.6,
+  "generator": "hand-written test fixture",
+  "elements": [
+    { "type": "way", "id": 1, "nodes": [101, 102, 103],
+      "geometry": [{"lat": 55.7950, "lon": -4.2960}, {"lat": 55.7975, "lon": -4.2960}, {"lat": 55.8000, "lon": -4.2960}],
+      "tags": { "highway": "residential", "name": "Test Avenue" } },
+    { "type": "way", "id": 2, "nodes": [102, 201, 202],
+      "geometry": [{"lat": 55.7975, "lon": -4.2960}, {"lat": 55.7975, "lon": -4.2930}, {"lat": 55.7975, "lon": -4.2900}],
+      "tags": { "highway": "primary", "name": "Test Road" } },
+    { "type": "way", "id": 3, "nodes": [301, 302],
+      "geometry": [{"lat": 55.7960, "lon": -4.2960}, {"lat": 55.7960, "lon": -4.2930}],
+      "tags": { "highway": "footway" } },
+    { "type": "way", "id": 4, "nodes": [401, 402, 403, 404, 401],
+      "geometry": [{"lat": 55.7962, "lon": -4.2955}, {"lat": 55.7962, "lon": -4.2951},
+                   {"lat": 55.7965, "lon": -4.2951}, {"lat": 55.7965, "lon": -4.2955},
+                   {"lat": 55.7962, "lon": -4.2955}],
+      "tags": { "building": "house" } },
+    { "type": "way", "id": 5, "nodes": [501, 502, 503, 504, 501],
+      "geometry": [{"lat": 55.7980, "lon": -4.2950}, {"lat": 55.7980, "lon": -4.2920},
+                   {"lat": 55.7995, "lon": -4.2920}, {"lat": 55.7995, "lon": -4.2950},
+                   {"lat": 55.7980, "lon": -4.2950}],
+      "tags": { "leisure": "park", "name": "Test Park" } }
+  ]
+}
