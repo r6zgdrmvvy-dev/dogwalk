@@ -118,6 +118,48 @@ are watching starts dark and lifts as he actually reaches it, so "explored"
 moves while you watch; everything covered on the other walks stays lit, because
 he really has been there.
 
+The trail he leaves is coloured by how fast he was going at that moment —
+dark where he was dawdling, bright where he was striding — so a walk's shape
+tells you something once it is drawn, rather than being one flat line. The key
+sits under the transport bar.
+
+Where he stopped is marked. A stop is a real one: a cluster of consecutive
+fixes within 40m of each other lasting four minutes or more. That is a lamp
+post worth a proper investigation, a chat with somebody, or a sit down — not a
+treasure scattered at random, which is what an earlier version did and which
+meant nothing.
+
+A world is kept once built. Nearby walks snap to the same 200m grid of bounds,
+so playing a second walk around the same streets re-lights the fog and redraws
+the trail rather than rebuilding the whole town, and picking up a walk you have
+already watched is close to instant.
+
+### Shops, houses and the rest
+
+Buildings are classified off their own OSM tags rather than all drawn the same.
+A shop, a café or a bank gets a felted flat roof with a parapet and a proper
+shopfront onto the pavement — painted fascia, plate window, stallriser, recessed
+door — so the parade on Fenwick Road reads as a parade and not as forty
+identical bungalows. Schools, churches and halls take slate; blocks of flats
+take the flat roof; everything else is a house, with its own pitched roof colour
+and a front elevation of windows, bays and the occasional door. The procedural
+fallback, for corners of the map OSM has barely touched, still puts up houses,
+because a Glasgow suburb overwhelmingly is houses.
+
+Ground touching a shop or a civic building is paved right up to the wall.
+Nobody keeps a privet hedge outside a chip shop, and a school forecourt is not
+a front garden.
+
+Named shops, schools and churches are lettered on the map alongside the street
+and park names, fading in as you zoom down to walking scale — at map scale they
+are clutter, and at street scale they are the point of the street.
+
+Nothing is allowed to print through anything else. Names go down in order of
+importance — the park, then the named places, then the streets — and any label
+whose box would land on one already placed is dropped rather than drawn over it.
+Street names repeat every 70m along their road, so losing one repeat costs
+nothing; two names on top of each other costs both of them.
+
 ### Stats
 
 The "Stats" button opens a read-out of everything loaded: total distance as a
@@ -150,6 +192,28 @@ actually walked in: rainfall drives the shower, cloud cover flattens the light
 temperature and conditions are reported next to the clock. Past weather never
 changes, so each day is cached permanently once fetched. If the lookup fails,
 the walk plays dry and says nothing about the weather.
+
+All four readings are animated, not just the rainfall:
+
+- **Rain** falls harder and denser with the hourly total, and splashes where it
+  lands. The wind tips it over — the streaks lie along the direction of travel,
+  so a gale drives the rain sideways rather than leaving it falling straight
+  down through a storm.
+- **Snow** replaces it below about 1.5°C: the same millimetre of precipitation,
+  but slow, wandering flakes that do not streak and do not splash.
+- **Cloud shadows** drift across the ground under broken cloud, running with the
+  wind at roughly the wind's own speed. A clear sky has nothing to cast, and
+  full overcast casts one flat shadow everywhere, which the light grade already
+  handles — so both are left alone. They are sized against the view rather than
+  fixed in metres: a real shadow is a few hundred metres across, which at
+  walking zoom is wider than the screen and stops reading as something crossing
+  the ground.
+- **Gusts** blow litter along the pavement once the wind is over about 25 km/h.
+
+The hourly readings are eased between neighbouring hours rather than held flat
+across each one. The archive is hourly, but a walk is watched continuously, and
+a shower that switches on at the stroke of the hour and off sixty minutes later
+looks like a bug.
 
 One request covers the whole span of whatever you loaded rather than one per
 walk — a single call instead of sixty-odd, kinder to a free service that does
@@ -218,6 +282,13 @@ neighbouring steps rather than random noise — which is what keeps a small
 palette from going muddy when tiles repeat across a whole town. Light is fixed
 to the north-west everywhere, so every cast shadow falls south-east.
 
+Roofs come in five: four pitched — slate, charcoal, pantile, weathered — laid as
+staggered courses with vertical joints (drawn flat they read as horizontal
+siding), and one felted flat roof for shops and flats. The flat one is drawn as
+its own thing rather than slates in grey, because that is the whole point of it:
+a bitumen membrane in overlapping strips, ponding where it never lies flat, the
+odd rooflight, and a coping-stone parapet where it ends.
+
 Ground tiles are 16px; props (parked cars, lamp posts, bins, pillar boxes,
 benches) are authored on 32px frames — two tiles across — so a car comes out
 about 4m long at native scale with its pixels still landing exactly on the
@@ -236,8 +307,18 @@ npm install -D playwright && npx playwright install chromium
 node tests/smoke.js
 ```
 
+Set `CHROMIUM_PATH` if you already have a browser and would rather not download
+another (`CHROMIUM_PATH=/opt/pw-browsers/chromium node tests/smoke.js`).
+
 Serves the repo, stubs Overpass with a small hand-written fixture so the run is
 offline, and checks the things that have actually broken before: the splash
 never clearing, walks not being found in a feed, playback not starting, the HUD
 panels trapping you on a phone, and silent page errors. It found two real faults
 the first time it ran.
+
+The fixture is a small invented town rather than a single street, because some
+of what is being checked only happens at scale: real OSM footprints are only
+trusted over the procedural frontage once there are more than a dozen of them,
+so a two-building fixture never exercised the path that draws shops as shops.
+Weather is checked by injecting hourly rows directly and asking the scene what
+it drew, since the archive lookup is offline in a test run.

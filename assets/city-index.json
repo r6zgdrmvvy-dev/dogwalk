@@ -1,6 +1,6 @@
 {
   "_cols": 8,
-  "_count": 58,
+  "_count": 66,
   "_size": 16,
   "dashH": 3,
   "dashV": 4,
@@ -35,9 +35,10 @@
     "postbox": 10
   },
   "roofBase": 26,
-  "roofCount": 4,
+  "roofCount": 5,
   "roofStride": 5,
   "scrub": 18,
+  "shopWall": 63,
   "tarmac": 0,
   "tarmacB": 1,
   "trees": [
@@ -46,8 +47,8 @@
     24,
     25
   ],
-  "wallBase": 46,
-  "wallCount": 4,
+  "wallBase": 51,
+  "wallCount": 5,
   "wallStride": 3,
   "water": 21,
   "yellowH": 5,

@@ -58,7 +58,7 @@ async function waitForReady(page) {
 (async () => {
   const server = await serve();
   const base = "http://127.0.0.1:" + server.address().port + "/game.html";
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 
   try {
     console.log("desktop");
@@ -111,6 +111,48 @@ async function waitForReady(page) {
           grade.dx < 12 && grade.dy < 12 && grade.dw < 12 && grade.dh < 12,
           JSON.stringify(grade));
 
+    // A shop in the fixture has to come out as a shop: flat felted roof,
+    // shopfront onto the pavement, and its name on the map. Picking roof and
+    // wall purely by hash (as an earlier version did) drew the whole town as
+    // identical bungalows.
+    const shops = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world");
+      let shopWall = 0, flatRoof = 0, pitched = 0;
+      s.layer.forEachTile((t) => {
+        if (t.index >= 63) shopWall++;
+        else if (t.index >= 46 && t.index < 51) flatRoof++;
+        else if (t.index >= 26 && t.index < 46) pitched++;
+      });
+      return { shopWall, flatRoof, pitched,
+               places: (s.worldRef.labels || []).filter((l) => l.kind === "place").length };
+    });
+    check("shops get a flat roof and a shopfront",
+          shops.shopWall > 0 && shops.flatRoof > 0, JSON.stringify(shops));
+    check("houses keep their pitched roofs", shops.pitched > shops.flatRoof, shops.pitched);
+    check("named shops are labelled", shops.places > 0, shops.places);
+
+    // No name may be printed through another. Labels are laid down park-first,
+    // then shops, then streets, and anything that would collide is dropped.
+    const overlap = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world");
+      const ls = s.labelGroup.getChildren();
+      const box = (t) => {
+        const ca = Math.abs(Math.cos(t.rotation)), sa = Math.abs(Math.sin(t.rotation));
+        const bw = t.width * ca + t.height * sa, bh = t.width * sa + t.height * ca;
+        return { x0: t.x - bw / 2, x1: t.x + bw / 2, y0: t.y - bh / 2, y1: t.y + bh / 2 };
+      };
+      let over = 0, worst = null;
+      for (let i = 0; i < ls.length; i++) for (let j = i + 1; j < ls.length; j++) {
+        const a = box(ls[i]), b = box(ls[j]);
+        if (a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0) {
+          over++; if (!worst) worst = ls[i].text + " / " + ls[j].text;
+        }
+      }
+      return { n: ls.length, over, worst };
+    });
+    check("no two labels overlap", overlap.over === 0,
+          overlap.n + " labels, " + overlap.over + " clashes " + (overlap.worst || ""));
+
     // playback
     await page.click(".walk:nth-child(1)");
     await page.waitForFunction(
@@ -128,6 +170,47 @@ async function waitForReady(page) {
     check("scrubber advances", play.scrub > 0, play.scrub);
     check("camera follows the dog", play.followed);
     check("dog is a finite heading", Number.isFinite(play.turned), play.turned);
+
+    // Weather animation. Open-Meteo is offline in this run, so the hourly rows
+    // are injected directly and the scene is asked what it drew: rain streaks
+    // and splashes in a shower, flakes and no splashes below freezing, litter
+    // on the wind in a gale, drifting cloud shadows under broken cloud and none
+    // under a clear sky.
+    const wx = async (row) => {
+      await page.evaluate((r) => {
+        const d = window.dogwalk;
+        d.state.wx = {};
+        for (const p of d.state.points) {
+          d.state.wx[new Date(p.t).toISOString().slice(0, 14) + "00"] = r;
+        }
+        window.game.scene.getScene("world").cloudDrift = { x: 0, y: 0 };
+      }, row);
+      await page.waitForTimeout(1800);
+      return page.evaluate(() => {
+        const s = window.game.scene.getScene("world");
+        return { fall: s.rain ? s.rainKind : null,
+                 drops: s.rain ? s.rain.getAliveParticleCount() : 0,
+                 splash: s.splash ? s.splash.getAliveParticleCount() : 0,
+                 gust: s.gust ? s.gust.getAliveParticleCount() : 0,
+                 clouds: s.clouds.visible, drift: Math.abs(s.cloudDrift.x) };
+      });
+    };                                       // [mm, °C, cloud %, wind km/h]
+    const shower = await wx([1.4, 12, 80, 14]);
+    check("rain falls and splashes", shower.fall === "raindrop" &&
+          shower.drops > 0 && shower.splash > 0, JSON.stringify(shower));
+    const snow = await wx([1.2, 0.5, 85, 12]);
+    check("below freezing it snows instead", snow.fall === "snowflake" &&
+          snow.drops > 0 && snow.splash === 0, JSON.stringify(snow));
+    const gale = await wx([3.0, 9, 70, 52]);
+    check("a gale blows litter about", gale.gust > 0, JSON.stringify(gale));
+    const broken = await wx([0, 14, 55, 18]);
+    check("broken cloud casts drifting shadows",
+          broken.clouds && broken.drift > 0 && broken.fall === null,
+          JSON.stringify(broken));
+    const clear = await wx([0, 17, 5, 6]);
+    check("a clear sky is left alone",
+          !clear.clouds && clear.fall === null && clear.gust === 0,
+          JSON.stringify(clear));
 
     // keyboard: space pauses
     await page.keyboard.press("Space");

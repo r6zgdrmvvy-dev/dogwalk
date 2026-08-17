@@ -47,8 +47,14 @@ GLASS = [(46, 58, 74), (62, 80, 100), (96, 122, 146), (150, 178, 198)]
 WOOD = [(48, 34, 26), (70, 50, 36), (96, 70, 50), (124, 94, 68)]
 SHADOW = (0, 0, 0, 70)
 
-ROOF_RAMPS = [SLATE, CHARCOAL, PANTILE, WEATHERED]
+# A flat felted roof, for the parade of shops. Nothing pitched about it.
+FELT = [(46, 50, 50), (60, 65, 64), (76, 82, 80), (92, 98, 95), (114, 120, 116)]
+
+ROOF_RAMPS = [SLATE, CHARCOAL, PANTILE, WEATHERED, FELT]
 WALL_RAMPS = [RED_SANDSTONE, BLOND_SANDSTONE, HARLING, RENDER]
+
+# Fascia colours for shopfronts — the painted board above the window.
+FASCIA = [(58, 76, 62), (74, 44, 44), (40, 56, 78), (72, 60, 36)]
 
 rng = random.Random(20260816)
 
@@ -394,6 +400,54 @@ def roof(ramp, edge=None):
     return im
 
 
+def flat_roof(ramp, edge=None):
+    """The felted flat roof of a shop unit or a block of flats.
+
+    Drawn as its own thing rather than slates in grey, because that is the whole
+    point: from above, a parade of shops has to be legible as *not houses* at a
+    glance. So: a bitumen membrane in overlapping strips, a rooflight or a vent
+    box here and there, and a coping-stone parapet where the roof ends.
+    """
+    im, d = new(ramp[2])
+    r = random.Random(1700 + ramp[0][0] + (0 if edge is None else ord(edge)))
+    # Membrane laid in strips, each seam a dark line with a lit lap above it.
+    dither(im, 0, 0, T - 1, T - 1, ramp[1], ramp[2], 0.5)
+    for row in range(1, T, 5):
+        rect(d, 0, row, T - 1, row, ramp[0])
+        rect(d, 0, row - 1, T - 1, row - 1, ramp[3])
+    # Ponding: felt never lies flat, and the puddles are what give it depth.
+    for _ in range(2):
+        px, py = r.randrange(0, T - 5), r.randrange(0, T - 4)
+        dither(im, px, py, px + 4, py + 3, ramp[0], ramp[1], 0.6)
+    if r.random() < 0.35:                              # rooflight or plant box
+        bx, by = r.randrange(2, T - 6), r.randrange(2, T - 6)
+        rect(d, bx, by, bx + 3, by + 3, ramp[4])
+        rect(d, bx, by, bx + 3, by, ramp[3])
+        rect(d, bx + 4, by + 1, bx + 4, by + 4, ramp[0])   # cast shadow, NW light
+        rect(d, bx + 1, by + 4, bx + 4, by + 4, ramp[0])
+    speckle(im, 0, 0, T - 1, T - 1, ramp[0], 0.05, r)
+
+    # Parapet: a raised upstand with a pale coping along the top, so the edge of
+    # a flat roof reads as a wall rather than as a cut.
+    if edge == "n":
+        rect(d, 0, 0, T - 1, 0, ramp[4])
+        rect(d, 0, 1, T - 1, 1, ramp[3])
+        rect(d, 0, 2, T - 1, 2, ramp[0])
+    elif edge == "s":
+        rect(d, 0, T - 3, T - 1, T - 3, ramp[0])
+        rect(d, 0, T - 2, T - 1, T - 2, ramp[4])
+        rect(d, 0, T - 1, T - 1, T - 1, ramp[1])
+    elif edge == "w":
+        rect(d, 0, 0, 0, T - 1, ramp[4])
+        rect(d, 1, 0, 1, T - 1, ramp[3])
+        rect(d, 2, 0, 2, T - 1, ramp[0])
+    elif edge == "e":
+        rect(d, T - 3, 0, T - 3, T - 1, ramp[0])
+        rect(d, T - 2, 0, T - 2, T - 1, ramp[4])
+        rect(d, T - 1, 0, T - 1, T - 1, ramp[1])
+    return im
+
+
 # ------------------------------------------------------------------- walls ---
 def wall_base(ramp, seed):
     """Masonry ground: staggered courses with per-block tonal variation."""
@@ -440,6 +494,40 @@ def wall_bay(ramp):
         rect(d, bx, 3, bx, 10, RENDER[3])
     rect(d, 2, 11, 12, 12, PAVING[4])
     rect(d, 2, 13, 12, 13, ramp[0])
+    return im
+
+
+def shopfront(kind):
+    """A parade shop seen face-on: painted fascia board, big plate window with a
+    stallriser under it, and a recessed door. Reads as commercial at a glance
+    because the glass runs the full width, which a house's never does."""
+    im, d = new(HARLING[2])
+    r = random.Random(1400 + kind)
+    fascia = FASCIA[kind % len(FASCIA)]
+    # rendered surround
+    for row in range(0, T, 4):
+        rect(d, 0, row, T - 1, row, HARLING[1])
+    rect(d, 0, 0, T - 1, 3, fascia)                      # fascia board
+    rect(d, 0, 0, T - 1, 0, tuple(min(255, c + 26) for c in fascia))
+    rect(d, 0, 3, T - 1, 3, tuple(max(0, c - 18) for c in fascia))
+    for x in range(1, T - 1, 3):                         # lettering, suggested
+        put(im, x, 1, (206, 198, 176))
+        put(im, x + 1, 1, (206, 198, 176))
+
+    if kind % 4 == 3:
+        rect(d, 1, 5, 14, 12, WOOD[1])                   # a shuttered unit
+        for x in range(1, 15):
+            put(im, x, 6, WOOD[2]); put(im, x, 9, WOOD[2])
+    else:
+        rect(d, 1, 5, 14, 11, GLASS[1])                  # plate glass
+        dither(im, 1, 5, 14, 7, GLASS[2], GLASS[3], density=0.4)
+        dither(im, 1, 8, 14, 11, GLASS[0], GLASS[1], density=0.45)
+        rect(d, 7, 5, 7, 11, HARLING[3])                 # mullion
+        if kind % 4 == 1:
+            rect(d, 10, 5, 14, 11, WOOD[2])              # door into the shop
+            put(im, 11, 8, (206, 180, 96))
+    rect(d, 0, 12, T - 1, 13, PAVING[2])                 # stallriser
+    rect(d, 0, 14, T - 1, T - 1, PAVING[1])              # pavement at the foot
     return im
 
 
@@ -655,15 +743,18 @@ def build():
     index["roofCount"] = len(ROOF_RAMPS)
     for ramp in ROOF_RAMPS:
         for edge in (None, "n", "s", "w", "e"):
-            tiles.append(roof(ramp, edge))
+            tiles.append(flat_roof(ramp, edge) if ramp is FELT else roof(ramp, edge))
 
     index["wallBase"] = len(tiles)
     index["wallStride"] = 3
-    index["wallCount"] = len(WALL_RAMPS)
+    index["wallCount"] = len(WALL_RAMPS) + 1        # the shopfront is the last one
     for ramp in WALL_RAMPS:
         tiles.append(wall_window(ramp))
         tiles.append(wall_bay(ramp))
         tiles.append(wall_door(ramp))
+    index["shopWall"] = len(tiles)
+    for k in range(3):
+        tiles.append(shopfront(k))
 
     rows = (len(tiles) + COLS - 1) // COLS
     sheet = Image.new("RGBA", (COLS * T, rows * T), (0, 0, 0, 0))

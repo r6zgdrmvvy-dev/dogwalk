@@ -80,6 +80,12 @@
 
   #btn-follow.off { display: none; }
 
+  #pace-key { display: flex; align-items: center; gap: 5px; font-size: 10px; opacity: 0.65; }
+  #pace-key i {
+    display: block; width: 54px; height: 6px; border-radius: 3px;
+    background: linear-gradient(to right, #6b4a1a, #9c6f22, #c98f2c, #e8a33d, #f7d493);
+  }
+
   #zoom { display: flex; flex-direction: column; gap: 6px; }
   #zoom .btn { width: 38px; text-align: center; font-size: 18px; line-height: 1; padding: 8px 0; }
 
@@ -285,7 +291,7 @@
     <div class="stat"><b id="s-dist">0</b><span>km</span></div>
     <div class="stat"><b id="s-walks">0</b><span>walks</span></div>
     <div class="stat"><b id="s-explored">0%</b><span>explored</span></div>
-    <div class="stat"><b id="s-treasure">0</b><span>found</span></div>
+    <div class="stat"><b id="s-treasure">0</b><span>stops</span></div>
   </div>
   <div style="display:flex;gap:8px;align-items:flex-start;">
     <button class="btn" id="btn-walks">Walks</button>
@@ -316,6 +322,9 @@
       <button class="btn on" data-speed="1">1×</button>
       <button class="btn" data-speed="2">2×</button>
       <button class="btn" data-speed="4">4×</button>
+    </div>
+    <div id="pace-key" title="Trail colour shows how fast he was going">
+      <span>slow</span><i></i><span>brisk</span>
     </div>
     <button class="btn off" id="btn-follow" title="Centre on the dog">⌖</button>
     <div id="clock"></div>
@@ -380,13 +389,43 @@
   //  Walk data
   // ============================================================
 
-  var TREASURE_CHANCE = 0.22;
   var TREASURES = ["🌰", "🦴", "🍂", "🎾", "🪵", "💭"];
+
+  // Where he actually stopped. A dog walk is not a steady march — he stops to
+  // read the news off a lamp post, and the tracker records that as a run of
+  // fixes in the same place. These used to be scattered by a hash over a grid,
+  // which made "found" a number with nothing behind it.
+  var STOP_RADIUS_M = 40;     // fixes within this of the first count as the same stop
+  var STOP_MIN_S = 240;       // and it has to last this long to be a stop at all
+
+  function findStops(walk) {
+    var out = [], i = 0;
+    while (i < walk.length) {
+      var j = i;
+      while (j + 1 < walk.length &&
+             haversineKm(walk[i], walk[j + 1]) * 1000 <= STOP_RADIUS_M) j++;
+      var secs = (new Date(walk[j].t) - new Date(walk[i].t)) / 1000;
+      if (j > i && secs >= STOP_MIN_S) {
+        var la = 0, ln = 0, n = 0;
+        for (var k = i; k <= j; k++) { la += walk[k].lat; ln += walk[k].lng; n++; }
+        out.push({ lat: la / n, lng: ln / n, secs: secs, t: walk[i].t });
+        i = j + 1;
+      } else i++;
+    }
+    return out;
+  }
+
+  function allStops() {
+    var out = [];
+    state.walks.forEach(function (w) { out = out.concat(findStops(w)); });
+    return out;
+  }
 
   var GRID_COLS = 28, GRID_ROWS = 16;   // coarse grid, only for the explored %
 
   var state = {
     points: [], walks: [], bounds: null, territory: null, grid: null, activeWalk: -1, wx: null,
+    stops: [],
     osmWays: null, dogName: "Your Dog"
   };
 
@@ -529,6 +568,18 @@
     var shortLng = MIN_WORLD_M / mPerDegLng - (maxLng - minLng);
     if (shortLat > 0) { minLat -= shortLat / 2; maxLat += shortLat / 2; }
     if (shortLng > 0) { minLng -= shortLng / 2; maxLng += shortLng / 2; }
+
+    // Snap outward to a ~200m grid. Walks from the same neighbourhood then land
+    // on identical bounds, which is what lets one built world serve several of
+    // them instead of rebuilding a second's worth of tiles and sprites every
+    // time you pick a different day. Costs a little detail: the world is up to
+    // 200m wider than it needs to be on each side.
+    var SNAP = 200;
+    var latStep = SNAP / 111320, lngStep = SNAP / mPerDegLng;
+    minLat = Math.floor(minLat / latStep) * latStep;
+    maxLat = Math.ceil(maxLat / latStep) * latStep;
+    minLng = Math.floor(minLng / lngStep) * lngStep;
+    maxLng = Math.ceil(maxLng / lngStep) * lngStep;
     return { minLat: minLat, maxLat: maxLat, minLng: minLng, maxLng: maxLng };
   }
 
@@ -581,17 +632,8 @@
       var cell = pointToCell(p, state.territory);
       grid[cell.row][cell.col].explored = true;
     });
-    for (var r2 = 0; r2 < GRID_ROWS; r2++) {
-      for (var c2 = 0; c2 < GRID_COLS; c2++) {
-        var g = grid[r2][c2];
-        if (!g.explored) continue;
-        var idx = r2 * GRID_COLS + c2;
-        if (seededRandom(idx * 1.618) < TREASURE_CHANCE) {
-          g.treasure = TREASURES[Math.floor(seededRandom(idx * 2.718 + 1) * TREASURES.length)];
-        }
-      }
-    }
     state.grid = grid;
+    state.stops = allStops();
     updateStats();
   }
 
@@ -669,11 +711,26 @@
 
   // The conditions at one moment. Hours are UTC on both sides, which is what the
   // tracker records, so there is no timezone guessing.
+  //
+  // Interpolated between the two surrounding hours rather than held flat across
+  // each one. The archive is hourly, but a walk is watched continuously, and a
+  // shower that switches on at the stroke of the hour and off sixty minutes
+  // later looks like a bug. Rainfall is an hourly total, so it is eased rather
+  // than summed: the shape is right even though the resolution is not.
+  function hourKey(ms) { return new Date(ms).toISOString().slice(0, 14) + "00"; }
+
   function weatherAt(iso) {
     if (!state.wx) return null;
-    var row = state.wx[new Date(iso).toISOString().slice(0, 14) + "00"];
+    var ms = new Date(iso).getTime();
+    var row = state.wx[hourKey(ms)];
     if (!row) return null;
-    return { rain: row[0], temp: row[1], cloud: row[2], wind: row[3] };
+    var mins = new Date(ms).getUTCMinutes();
+    // Centre each hourly reading on the half hour and blend towards its
+    // neighbour, so conditions drift instead of stepping.
+    var other = state.wx[hourKey(ms + (mins < 30 ? -3600e3 : 3600e3))];
+    var f = other ? Math.abs(mins - 30) / 60 : 0;
+    var mix = function (i) { return other ? row[i] * (1 - f) + other[i] * f : row[i]; };
+    return { rain: mix(0), temp: mix(1), cloud: mix(2), wind: mix(3) };
   }
 
   // What a whole walk was like: total rainfall over its hours, and the averages.
@@ -764,6 +821,26 @@
   }
 
   var WORLD_MARGIN_M = 140;      // ground drawn beyond the walked area
+
+  // What sort of building this is, from whatever OSM happens to know. Most are
+  // tagged only `building=yes`, so the shop and amenity tags do a lot of the
+  // work: a hairdresser tagged on the building is a shop even when the building
+  // tag says nothing.
+  var SHOP_BUILDINGS = { retail: 1, commercial: 1, supermarket: 1, kiosk: 1, shop: 1 };
+  var CIVIC_BUILDINGS = { school: 1, church: 1, chapel: 1, cathedral: 1, hospital: 1,
+                          civic: 1, public: 1, university: 1, college: 1, hotel: 1 };
+  var CIVIC_AMENITIES = { place_of_worship: 1, school: 1, townhall: 1, library: 1,
+                          hospital: 1, community_centre: 1, theatre: 1 };
+
+  function buildingType(t) {
+    if (t.shop) return "shop";
+    if (t.amenity && CIVIC_AMENITIES[t.amenity]) return "civic";
+    if (t.amenity) return "shop";                 // cafe, bank, takeaway, and so on
+    if (SHOP_BUILDINGS[t.building]) return "shop";
+    if (CIVIC_BUILDINGS[t.building]) return "civic";
+    if (t.building === "apartments" || t.building === "residential") return "flats";
+    return "house";
+  }
 
   function areaQuery(b) {
     // Every highway type the router can walk on, plus motorways, which get
@@ -952,10 +1029,14 @@
     trees: [22, 23, 24, 25],
     // Each roof colour is five tiles: interior, then a gutter edge facing
     // north / south / west / east, so a roofline reads as a roofline.
-    roofBase: 26, roofStride: 5, roofCount: 4,
+    // Five roof colours: four pitched (slate, charcoal, pantile, weathered) and
+    // a flat felted one, which is what a parade of shops has.
+    roofBase: 26, roofStride: 5, roofCount: 5, roofFlat: 4,
     // Front elevations, three per wall colour (window / bay window / door).
     // Drawn on the tile below a building so roofs sit on something.
-    wallBase: 46, wallStride: 3, wallCount: 4
+    wallBase: 51, wallStride: 3, wallCount: 4,
+    // Shopfronts: fascia board, plate glass, stallriser. Three variants.
+    shopWall: 63, shopWallCount: 3
   };
 
   // Street furniture (assets/props.png). Authored on 32px frames -- two tiles
@@ -1191,6 +1272,7 @@
     var lastA = anchors[anchors.length - 1].i;
     if (lastA < walk.length - 1) spans.push({ from: lastA, to: walk.length - 1, route: null });
 
+    window.__rs = { anchors: anchors.length, fixes: walk.length, routed: 0, straight: 0, spans: [] };
     var out = [];
     // Which pavement he is on. The GPS usually knows — a fix sits to one side
     // of the centreline — but a fix landing near the middle proves nothing, so
@@ -1206,6 +1288,10 @@
         var path = graph.route(spans[i].route[0], spans[i].route[1],
                                Math.max(180, straight * ROUTE_MAX_FACTOR));
         if (path && path.length > 1) nodes = path;
+      }
+      if (nodes) window.__rs.routed++; else {
+        window.__rs.straight++;
+        window.__rs.spans.push({ m: Math.round(straight), hadAnchors: !!spans[i].route });
       }
 
       var clean = [], halves = [];
@@ -1298,6 +1384,15 @@
     };
   }
 
+  // Five steps of one hue, deep to pale. A dog ambles at about 3 km/h, so the
+  // scale runs from a standstill to a brisk 5.
+  var PACE_STEPS = [0x6b4a1a, 0x9c6f22, 0xc98f2c, 0xe8a33d, 0xf7d493];
+
+  function paceColour(kmh) {
+    var f = Math.max(0, Math.min(1, kmh / 5));
+    return PACE_STEPS[Math.min(PACE_STEPS.length - 1, Math.floor(f * PACE_STEPS.length))];
+  }
+
   function mixHex(lo, hi, t) {
     var r = Math.round(((lo >> 16) & 255) + (((hi >> 16) & 255) - ((lo >> 16) & 255)) * t);
     var g2 = Math.round(((lo >> 8) & 255) + (((hi >> 8) & 255) - ((lo >> 8) & 255)) * t);
@@ -1359,7 +1454,7 @@
         if (!kind) return;
         var pts = w.geometry.map(function (g) { return toM(g.lat, g.lon); });
         var xs = pts.map(function (p) { return p.x; }), ys = pts.map(function (p) { return p.y; });
-        areas.push({ kind: kind, pts: pts,
+        areas.push({ kind: kind, pts: pts, btype: kind === "building" ? buildingType(t) : null,
           minX: Math.min.apply(null, xs), maxX: Math.max.apply(null, xs),
           minY: Math.min.apply(null, ys), maxY: Math.max.apply(null, ys) });
       }
@@ -1415,25 +1510,31 @@
     // and is uncovered as he actually reaches it — otherwise "explored" is a
     // number that never moves while you watch. Everything he covered on the
     // other walks stays lit, because he really has been there.
-    var active = state.activeWalk >= 0 ? state.walks[state.activeWalk] : null;
-    var activePts = null;
-    if (active) {
-      activePts = new Set();
-      active.forEach(function (p) { activePts.add(p.t + "|" + p.lat + "|" + p.lng); });
-    }
-    var visited = {};
-    state.points.forEach(function (pt) {
-      if (activePts && activePts.has(pt.t + "|" + pt.lat + "|" + pt.lng)) return;
-      var m = toM(pt.lat, pt.lng);
-      var cx = Math.floor(m.x / VIS), cy = Math.floor(m.y / VIS);
-      for (var ox = -2; ox <= 2; ox++) {
-        for (var oy = -2; oy <= 2; oy++) {
-          var lvl = (Math.abs(ox) <= 1 && Math.abs(oy) <= 1) ? 2 : 1;
-          var kk2 = (cx + ox) + "," + (cy + oy);
-          if ((visited[kk2] || 0) < lvl) visited[kk2] = lvl;
-        }
+    //
+    // This is the only part of the world that depends on which walk is
+    // selected, which is what lets the rest of it be cached and reused.
+    function computeSeen(target) {
+      var active = state.activeWalk >= 0 ? state.walks[state.activeWalk] : null;
+      var skip = null;
+      if (active) {
+        skip = {};
+        active.forEach(function (p) { skip[p.t + "|" + p.lat + "|" + p.lng] = 1; });
       }
-    });
+      var visited = {};
+      state.points.forEach(function (pt) {
+        if (skip && skip[pt.t + "|" + pt.lat + "|" + pt.lng]) return;
+        var m = toM(pt.lat, pt.lng);
+        var cx = Math.floor(m.x / VIS), cy = Math.floor(m.y / VIS);
+        for (var ox = -2; ox <= 2; ox++) {
+          for (var oy = -2; oy <= 2; oy++) {
+            var lvl = (Math.abs(ox) <= 1 && Math.abs(oy) <= 1) ? 2 : 1;
+            var kk2 = (cx + ox) + "," + (cy + oy);
+            if ((visited[kk2] || 0) < lvl) visited[kk2] = lvl;
+          }
+        }
+      });
+      for (var si2 = 0; si2 < target.length; si2++) target[si2] = visited[visIdx[si2]] || 0;
+    }
 
     for (var ty = 0; ty < rows; ty++) {
       for (var tx = 0; tx < cols; tx++) {
@@ -1574,6 +1675,17 @@
       return !!nearBuilding[Math.floor(ty2 / NB) * nbCols + Math.floor(tx2 / NB)];
     }
 
+    // What each building actually is, off its OSM tags: the parade of shops on
+    // Eastwoodmains Road should not be drawn as forty identical bungalows.
+    // Anything the procedural fallback invented is a house, which is what the
+    // overwhelming majority of a Glasgow suburb is.
+    var BT = { house: 0, flats: 1, civic: 2, shop: 3 };
+    var bType = new Int8Array(cols * rows);
+    for (var bt = 0; bt < cols * rows; bt++) {
+      if (kindMap[bt] !== 4 || footprint[bt] < 0) continue;
+      bType[bt] = BT[areas[footprint[bt]].btype] || 0;
+    }
+
     // Which colour each building roof is, so its wall matches, and where a
     // front elevation should be drawn (the tile directly below a building).
     var roofCol = new Int8Array(cols * rows).fill(-1);
@@ -1581,14 +1693,43 @@
       if (kindMap[rc] !== 4) continue;
       // imul, not `*`: the ids run past 2^32 and a plain multiply loses the
       // low bits to float precision, which collapses every roof to one colour.
-      roofCol[rc] = (Math.imul(bId[rc], 2654435761) >>> 8) % TILE.roofCount;
+      var rhash = (Math.imul(bId[rc], 2654435761) >>> 8);
+      // A shop unit or a flat block is flat-roofed and felted; a school or a
+      // church is slate. Only houses get the full run of pitched tile colours.
+      roofCol[rc] = bType[rc] === BT.shop || bType[rc] === BT.flats
+        ? TILE.roofFlat
+        : (bType[rc] === BT.civic ? rhash % 2 : rhash % TILE.roofFlat);
     }
     var wallMask = new Int8Array(cols * rows).fill(-1);
+    var wallType = new Int8Array(cols * rows);
     for (var wy2 = 1; wy2 < rows; wy2++) {
       for (var wx2 = 0; wx2 < cols; wx2++) {
         var wi = wy2 * cols + wx2;
         if (kindMap[wi] === 4) continue;
-        if (kindMap[wi - cols] === 4) wallMask[wi] = roofCol[wi - cols];
+        if (kindMap[wi - cols] !== 4) continue;
+        wallMask[wi] = Math.min(roofCol[wi - cols], TILE.wallCount - 1);
+        wallType[wi] = bType[wi - cols];
+      }
+    }
+
+    // Nobody keeps a privet hedge outside a chip shop. Ground touching a shop
+    // or a civic building is paved right up to the wall, the way a shopping
+    // parade or a school forecourt actually is.
+    var frontage = new Uint8Array(cols * rows);
+    for (var fy = 0; fy < rows; fy++) {
+      for (var fx = 0; fx < cols; fx++) {
+        var fi2 = fy * cols + fx;
+        if (kindMap[fi2] === 4) continue;
+        for (var oy4 = -1; oy4 <= 1 && !frontage[fi2]; oy4++) {
+          for (var ox4 = -1; ox4 <= 1; ox4++) {
+            var qy2 = fy + oy4, qx2 = fx + ox4;
+            if (qy2 < 0 || qy2 >= rows || qx2 < 0 || qx2 >= cols) continue;
+            var qi = qy2 * cols + qx2;
+            if (kindMap[qi] === 4 && (bType[qi] === BT.shop || bType[qi] === BT.civic)) {
+              frontage[fi2] = 1; break;
+            }
+          }
+        }
       }
     }
 
@@ -1631,9 +1772,15 @@
         var ii = y * cols + x, kk = kindMap[ii];
         var seed = Math.abs((x * 73856093) ^ (y * 19349663));
         if (wallMask[ii] >= 0) {
-          // window / bay / door — doors are rare, bays common on suburban fronts
-          var wv = seed % 11 === 0 ? 2 : (seed % 3 === 0 ? 1 : 0);
-          line.push(TILE.wallBase + wallMask[ii] * TILE.wallStride + wv);
+          if (wallType[ii] === BT.shop) {
+            // A shop unit fronts the pavement with a painted fascia and a
+            // plate window, not a bay and a garden gate.
+            line.push(TILE.shopWall + seed % TILE.shopWallCount);
+          } else {
+            // window / bay / door — doors are rare, bays common on suburban fronts
+            var wv = seed % 11 === 0 ? 2 : (seed % 3 === 0 ? 1 : 0);
+            line.push(TILE.wallBase + wallMask[ii] * TILE.wallStride + wv);
+          }
           continue;
         }
         if (kk === 1) {
@@ -1677,6 +1824,7 @@
           // Boundary hedges between neighbouring plots. Without these the
           // gardens merge into one green field and the street stops reading
           // as a row of separate homes.
+          if (frontage[ii]) { line.push(seed % 4 === 0 ? TILE.paveB : TILE.pave); continue; }
           var garden = !parkMap[ii] && isResidential(x, y);
           var plotEdge = garden && (
             (x > 0 && kindMap[ii - 1] === 3 && bCellX[ii - 1] !== bCellX[ii]) ||
@@ -1736,6 +1884,15 @@
           labels.push({ name: t.name, x: (q0.x + q1.x) / 2, y: (q0.y + q1.y) / 2,
                         angle: ang, kind: "street" });
         }
+      } else if (t.building && buildingType(t) !== "house" && buildingType(t) !== "flats") {
+        // The named shops, schools and churches he actually walks past. A
+        // hairdresser is a smaller thing than a park, so it is lettered
+        // smaller and only shows once you have zoomed in on it.
+        var sp = wy.geometry.map(function (g3) { return toM(g3.lat, g3.lon); });
+        var sx4 = 0, sy4 = 0;
+        sp.forEach(function (q) { sx4 += q.x; sy4 += q.y; });
+        labels.push({ name: t.name, x: sx4 / sp.length, y: sy4 / sp.length,
+                      angle: 0, kind: "place" });
       } else if (t.leisure === "park" || t.landuse === "recreation_ground" || t.leisure === "nature_reserve") {
         var pts2 = wy.geometry.map(function (g2) { return toM(g2.lat, g2.lon); });
         var cx = 0, cy = 0;
@@ -1762,7 +1919,7 @@
     for (var tyy = 0; tyy < rows; tyy++) {
       for (var txx = 0; txx < cols; txx++) {
         var ti = tyy * cols + txx;
-        if (kindMap[ti] !== 3) continue;
+        if (kindMap[ti] !== 3 || frontage[ti]) continue;
         var tseed = Math.abs((txx * 31337) ^ (tyy * 6971));
         // parks are wooded, gardens have the odd tree
         if (seededRandom(tseed % 5003) > (parkMap[ti] ? 0.20 : 0.13)) continue;
@@ -1814,11 +1971,12 @@
     }
 
     var seen = new Uint8Array(cols * rows);
-    for (var si2 = 0; si2 < cols * rows; si2++) seen[si2] = visited[visIdx[si2]] || 0;
+    computeSeen(seen);
 
     world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen,
               trees: trees, props: props, shadow: shadow, vis: VIS,
-              toM: toM, widthM: widthM, heightM: heightM };
+              toM: toM, widthM: widthM, heightM: heightM,
+              recomputeSeen: function () { computeSeen(seen); } };
     window.__world = world;
     return world;
   }
@@ -1951,9 +2109,30 @@
         .setBlendMode(Phaser.BlendModes.MULTIPLY);
 
       var rg = this.make.graphics({ add: false });
-      rg.fillStyle(0xbcd2e8, 1); rg.fillRect(0, 0, 1, 8);
+      rg.fillStyle(0xdceafa, 1); rg.fillRect(0, 0, 1, 8);
       rg.generateTexture("raindrop", 1, 8); rg.destroy();
       this.rain = null;
+
+      var sg = this.make.graphics({ add: false });
+      sg.fillStyle(0xffffff, 1); sg.fillRect(0, 0, 2, 2);
+      sg.generateTexture("snowflake", 2, 2); sg.destroy();
+
+      // A splash is a two-pixel ring, scaled up and faded as it spreads.
+      var pg = this.make.graphics({ add: false });
+      pg.lineStyle(1, 0xdce8f4, 1); pg.strokeCircle(4, 4, 3);
+      pg.generateTexture("splash", 8, 8); pg.destroy();
+
+      var lg = this.make.graphics({ add: false });
+      lg.fillStyle(0x8a7a48, 1); lg.fillRect(0, 0, 3, 2);
+      lg.generateTexture("litter", 3, 2); lg.destroy();
+
+      this.makeCloudTexture();
+      this.clouds = this.add.tileSprite(0, 0, 16, 16, "cloudshadow")
+        .setOrigin(0).setDepth(398000)
+        .setBlendMode(Phaser.BlendModes.MULTIPLY)
+        .setAlpha(0).setVisible(false);
+      this.cloudDrift = { x: 0, y: 0 };
+      this.cloudVel = { x: 0, y: 0 };
 
       if (GradeFX && this.renderer && this.renderer.type === Phaser.WEBGL) {
         this.cameras.main.setPostPipeline(GradeFX);
@@ -1966,9 +2145,43 @@
       if (firstMapIn) hideBoot();
     }
 
+    // Broken cloud, seen from underneath: soft patches that darken the ground
+    // as they pass over. Drawn once into a 256px tile and wrapped, with every
+    // blob repeated at each edge offset so the pattern is seamless — a visible
+    // seam sliding across the map would give the whole thing away.
+    makeCloudTexture() {
+      if (this.textures.exists("cloudshadow")) return;
+      var S = 256;
+      var tex = this.textures.createCanvas("cloudshadow", S, S);
+      var ctx = tex.getContext();
+      ctx.clearRect(0, 0, S, S);
+      var rnd = 20250817;
+      var next = function () {
+        rnd = (Math.imul(rnd, 1664525) + 1013904223) >>> 0;
+        return rnd / 4294967296;
+      };
+      for (var i = 0; i < 22; i++) {
+        var cx = next() * S, cy = next() * S, r = 28 + next() * 46;
+        for (var ox = -1; ox <= 1; ox++) {
+          for (var oy = -1; oy <= 1; oy++) {
+            var g = ctx.createRadialGradient(cx + ox * S, cy + oy * S, 0,
+                                             cx + ox * S, cy + oy * S, r);
+            g.addColorStop(0, "rgba(0,0,0,0.30)");
+            g.addColorStop(0.55, "rgba(0,0,0,0.16)");
+            g.addColorStop(1, "rgba(0,0,0,0)");
+            ctx.fillStyle = g;
+            ctx.beginPath();
+            ctx.arc(cx + ox * S, cy + oy * S, r, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+      tex.refresh();
+    }
+
     // Keeps the full-view overlays covering exactly what the camera can see.
     // Called every frame, because zooming and panning both change that.
-    fitOverlays() {
+    fitOverlays(delta) {
       if (!this.grade) return;
       var v = this.cameras.main.worldView;
       if (!v.width || !v.height) return;
@@ -1976,6 +2189,29 @@
       if (this.rain) {
         this.rain.setPosition(v.x, v.y - 20 / this.cameras.main.zoom);
         this.rainWidth = v.width;
+      }
+      if (this.splash) this.splash.setPosition(v.x, v.y);
+      if (this.gust) this.gust.setPosition(v.x - 40 / this.cameras.main.zoom, v.y);
+      if (this.clouds && this.clouds.visible) {
+        // The shadows are anchored to the ground, not to the screen, so the
+        // tile offset has to cancel out the camera before the drift is added —
+        // otherwise the clouds slide about whenever you pan.
+        this.clouds.setPosition(v.x, v.y).setSize(v.width, v.height);
+        var ts = this.clouds.tileScaleX || 1;
+        this.cloudDrift.x += this.cloudVel.x * (delta || 16) / 1000;
+        this.cloudDrift.y += this.cloudVel.y * (delta || 16) / 1000;
+        this.clouds.tilePositionX = v.x / ts + this.cloudDrift.x;
+        this.clouds.tilePositionY = v.y / ts + this.cloudDrift.y;
+      }
+      // Shop names: off at map scale, full strength once you are down among
+      // the streets. Recomputed only when the zoom has actually moved.
+      var z = this.cameras.main.zoom;
+      if (this.zoomLabels && this.zoomLabels.length && z !== this.labelZoom) {
+        this.labelZoom = z;
+        var a2 = Math.max(0, Math.min(0.92, (z / this.fitZoom - 2.2) / 2.5));
+        for (var i = 0; i < this.zoomLabels.length; i++) {
+          this.zoomLabels[i].setAlpha(a2).setVisible(a2 > 0.02);
+        }
       }
     }
 
@@ -2005,42 +2241,152 @@
       this.grade.fillColor = tint;
     }
 
-    // `mm` is the hour's rainfall. Anything at all shows, but a shower and a
-    // downpour should not look the same.
+    // Everything the hour's readings can be seen doing: falling precipitation
+    // (rain, or snow when it is cold enough for it), the splash it makes when
+    // it lands, cloud shadows crossing the ground, and litter blown along in a
+    // gale. `mm` is the hour's rainfall; temp and wind come from the same row.
     //
-    // The emitter lives in world space and is sized off the camera, for the same
-    // reason as the grade: a screen-fixed emitter still gets scaled by zoom, so
-    // zoomed out the rain fell in a small patch in the middle of the map. Speeds
-    // and drop sizes are divided by the zoom so a shower looks like a shower
-    // however far out you are, and it is rebuilt when the zoom moves far enough
-    // for that to matter.
-    setWeather(mm) {
+    // The emitters live in world space and are sized off the camera, for the
+    // same reason as the grade: a screen-fixed emitter still gets scaled by
+    // zoom, so zoomed out the rain fell in a small patch in the middle of the
+    // map. Speeds and drop sizes are divided by the zoom so a shower looks like
+    // a shower however far out you are, and they are rebuilt when the zoom
+    // moves far enough for that to matter.
+    setWeather(mm, temp, wind, cloud) {
+      var cam = this.cameras.main, z = cam.zoom || 1, v = cam.worldView;
+      wind = typeof wind === "number" ? wind : 0;
+      // Below about a degree and a half the same millimetre of precipitation
+      // falls as snow, which behaves nothing like rain: slower, wandering, and
+      // it does not streak.
+      var snowing = mm > 0 && typeof temp === "number" && temp <= 1.5;
+      var heavy = Math.max(0, Math.min(1, mm / 4));
+      // Wind is km/h at 10m. It drives the slant of the rain and the speed of
+      // everything else on the air.
+      var gale = Math.max(0, Math.min(1, wind / 45));
+      var drift = -(30 + gale * 320);
+
+      this.setCloudShadows(cloud, wind);
+      this.setGust(gale, z, v);
+
       if (!(mm > 0)) {
         if (this.rain) { this.rain.destroy(); this.rain = null; }
+        if (this.splash) { this.splash.destroy(); this.splash = null; }
         return;
       }
-      var cam = this.cameras.main, z = cam.zoom || 1;
-      var heavy = Math.max(0, Math.min(1, mm / 4));
-      var quantity = Math.max(1, Math.round(1 + heavy * 7));
-      var reuse = this.rain && this.rainZoom && Math.abs(z / this.rainZoom - 1) < 0.25;
+
+      var kind = snowing ? "snowflake" : "raindrop";
+      var reuse = this.rain && this.rainKind === kind &&
+                  this.rainZoom && Math.abs(z / this.rainZoom - 1) < 0.25;
       if (!reuse) {
         if (this.rain) this.rain.destroy();
-        var v = cam.worldView;
         this.rainZoom = z;
-        this.rain = this.add.particles(0, 0, "raindrop", {
-          x: { min: -40 / z, max: (v.width || this.scale.width) + 40 / z },
-          y: 0,
-          lifespan: 1100,
-          speedY: { min: 620 / z, max: 820 / z },
-          speedX: { min: -110 / z, max: -60 / z },
-          quantity: quantity,
-          alpha: { start: 0.42, end: 0.08 },
-          scaleX: 1 / z,
-          scaleY: { min: 0.7 / z, max: 1.5 / z }
-        }).setDepth(399000);
+        this.rainKind = kind;
+        var span = { min: -40 / z, max: (v.width || this.scale.width) + 40 / z };
+        this.rain = snowing
+          ? this.add.particles(0, 0, "snowflake", {
+              x: span, y: 0,
+              lifespan: 5200,
+              speedY: { min: 55 / z, max: 110 / z },
+              speedX: { min: (drift * 0.35 - 25) / z, max: (drift * 0.35 + 25) / z },
+              // Flakes wander on the way down rather than falling in a line.
+              accelerationX: { min: -30 / z, max: 30 / z },
+              quantity: 1,
+              alpha: { start: 0.9, end: 0.55 },
+              scale: { min: 0.7 / z, max: 1.8 / z }
+            }).setDepth(399000)
+          : this.add.particles(0, 0, "raindrop", {
+              x: span, y: 0,
+              lifespan: 1100,
+              speedY: { min: 620 / z, max: 820 / z },
+              speedX: { min: (drift - 40) / z, max: (drift + 40) / z },
+              quantity: 1,
+              alpha: { start: 0.62, end: 0.14 },
+              scaleX: 1 / z,
+              scaleY: { min: 0.7 / z, max: 1.5 / z },
+              // Streaks lie along the direction of travel, so a gale tips the
+              // whole downpour over instead of leaving it falling vertically.
+              rotate: Math.atan2(720, drift) * 180 / Math.PI - 90
+            }).setDepth(399000);
       }
-      this.rain.quantity = quantity;
-      this.rain.setAlpha(0.45 + heavy * 0.45);
+      this.rain.quantity = Math.max(1, Math.round(snowing ? 1 + heavy * 4 : 1 + heavy * 7));
+      this.rain.setAlpha(snowing ? 0.75 + heavy * 0.25 : 0.6 + heavy * 0.4);
+
+      // Splashes: rain hitting the ground, not snow settling on it.
+      if (snowing) {
+        if (this.splash) { this.splash.destroy(); this.splash = null; }
+      } else {
+        if (!this.splash || Math.abs(z / (this.splashZoom || 1) - 1) > 0.25) {
+          if (this.splash) this.splash.destroy();
+          this.splashZoom = z;
+          this.splash = this.add.particles(0, 0, "splash", {
+            x: { min: 0, max: v.width || this.scale.width },
+            y: { min: 0, max: v.height || this.scale.height },
+            lifespan: 420,
+            speed: 0,
+            quantity: 1,
+            frequency: 60,
+            alpha: { start: 0.45, end: 0 },
+            scale: { start: 0.25 / z, end: 1.1 / z }
+          }).setDepth(398500);
+        }
+        this.splash.frequency = Math.max(18, 150 - heavy * 130);
+        this.splash.setAlpha(0.35 + heavy * 0.5);
+      }
+    }
+
+    // Cloud passing over. Broken cloud is what you can see moving; a clear sky
+    // has nothing to cast and full overcast casts one flat shadow everywhere,
+    // which the time-of-day grade already handles.
+    setCloudShadows(cloud, wind) {
+      if (!this.clouds) return;
+      var c = typeof cloud === "number" ? cloud : 0;
+      var strength = Math.max(0, Math.min(1, (c - 15) / 35)) *
+                     Math.max(0, Math.min(1, (95 - c) / 25));
+      if (strength < 0.02) { this.clouds.setVisible(false); return; }
+      var mps = this.worldScale || 1;
+      var v = this.cameras.main.worldView;
+      // Sized against what you can currently see, not fixed in metres. A real
+      // cloud shadow is a few hundred metres across, which at walking zoom is
+      // wider than the screen — so it stops reading as a shadow crossing the
+      // ground and just dims everything. Three or four to a view is what looks
+      // like weather, so the blobs are kept to about a third of the view and
+      // clamped to a sane range of real sizes at either end.
+      var viewM = Math.max(40, (v.width || this.scale.width) / mps);
+      var blobM = Math.max(50, Math.min(500, viewM / 3.5));
+      var ts = Math.max(0.05, blobM * mps / 64);
+      this.clouds.tileScaleX = ts;
+      this.clouds.tileScaleY = ts;
+      // Cloud runs with the wind, at roughly the wind speed, converted from
+      // km/h to world units a second and then into tile-space units.
+      var wps = (typeof wind === "number" ? wind : 12) / 3.6 * mps / ts;
+      this.cloudVel = { x: wps * 0.92, y: wps * 0.38 };
+      this.clouds.setVisible(true).setAlpha(0.25 + strength * 0.55);
+    }
+
+    // Leaves and litter picked up off the pavement. Only in a real blow —
+    // below about 25 km/h nothing moves and inventing it would be noise.
+    setGust(gale, z, v) {
+      if (gale < 0.55) {
+        if (this.gust) { this.gust.destroy(); this.gust = null; }
+        return;
+      }
+      if (!this.gust || Math.abs(z / (this.gustZoom || 1) - 1) > 0.25) {
+        if (this.gust) this.gust.destroy();
+        this.gustZoom = z;
+        this.gust = this.add.particles(0, 0, "litter", {
+          x: 0,
+          y: { min: 0, max: v.height || this.scale.height },
+          lifespan: 2600,
+          speedX: { min: 260 / z, max: 620 / z },
+          speedY: { min: -40 / z, max: 90 / z },
+          rotate: { start: 0, end: 720 },
+          quantity: 1,
+          frequency: 260,
+          alpha: { start: 0.75, end: 0 },
+          scale: { min: 0.8 / z, max: 1.6 / z }
+        }).setDepth(398800);
+      }
+      this.gust.frequency = Math.max(70, 420 - gale * 340);
     }
 
     // Rebuilt whenever the walk data changes. Async so the browser can paint
@@ -2054,12 +2400,28 @@
       var token = (this.buildToken = (this.buildToken || 0) + 1);
       var stale = function () { return token !== this.buildToken; }.bind(this);
 
+      // Switching to another walk in the same patch of map does not need the
+      // world rebuilt — only the fog, the trails and the markers depend on which
+      // walk is selected. Rebuilding it all took about a second every time.
+      var key = boundsKey(state.bounds) + (state.osmWays ? "|map" : "|bare");
+      if (this.layer && this.builtKey === key) {
+        at(0.6, "Picking up where he left off");
+        await yieldFrame();
+        if (stale()) return;
+        this.refreshForWalk();
+        at(1, "Ready");
+        return;
+      }
+
       at(0, "Building the neighbourhood");
       await yieldFrame();
       if (stale()) return;
+      this.builtKey = key;
 
       if (this.layer) { this.layer.destroy(); this.layer = null; }
       if (this.labelGroup) this.labelGroup.clear(true, true);
+      this.zoomLabels = [];
+      this.labelZoom = null;
       if (this.treeGroup) this.treeGroup.clear(true, true);
       if (this.propGroup) this.propGroup.clear(true, true);
       if (this.trailGfx) this.trailGfx.clear();
@@ -2145,72 +2507,66 @@
 
       // Street and park names, straight from the OSM name tags. Rotated to
       // sit along their road the way a street atlas letters them.
+      //
+      // Nothing is allowed to overlap anything else. Names are laid down in
+      // order of importance — the park, then the named shops and schools, then
+      // the streets — and any label whose box would land on one already placed
+      // is dropped rather than drawn through it. Street names repeat every 70m
+      // along their road, so losing one repeat costs nothing; two names printed
+      // on top of each other costs both of them.
       this.labelGroup = this.labelGroup || this.add.group();
-      w.labels.forEach(function (lb) {
+      var RANK = { area: 0, place: 1, street: 2 };
+      var placed = [];
+      w.labels.slice()
+        .map(function (lb, i) { return { lb: lb, i: i }; })
+        .sort(function (a, b) {
+          return (RANK[a.lb.kind] - RANK[b.lb.kind]) || (a.i - b.i);
+        })
+        .forEach(function (entry) {
+        var lb = entry.lb;
         // OSM hands back ways that only clip the corner of the request, so some
         // names land outside the world. Invisible when zoomed in, but they
         // speckle the margins once you pull all the way out.
         if (lb.x < 0 || lb.y < 0 || lb.x > w.widthM || lb.y > w.heightM) return;
-        var isArea = lb.kind === "area";
+        var isArea = lb.kind === "area", isPlace = lb.kind === "place";
         var txt = self.add.text(lb.x * scale, lb.y * scale, lb.name.toUpperCase(), {
           fontFamily: "Baloo 2, system-ui, sans-serif",
           fontSize: isArea ? "10px" : "8px",
-          color: isArea ? "#d8ecбc".replace("б","b") : "#f0ece0",
+          color: isArea ? "#d8ecbc" : (isPlace ? "#ffe0a8" : "#f0ece0"),
           stroke: "#15171a",
-          strokeThickness: 3
+          strokeThickness: 3,
+          // Phaser measures the glyphs without the stroke, so without this the
+          // outline clips the right and bottom edges and an E reads as an F.
+          padding: { x: 3, y: 2 }
         }).setOrigin(0.5).setDepth(200000).setResolution(4);
         txt.setAlpha(isArea ? 0.95 : 0.88);
-        if (!isArea) txt.setRotation(lb.angle);
+        if (lb.kind === "street") txt.setRotation(lb.angle);
+
+        // Axis-aligned box of the label as drawn, rotation included.
+        var ca = Math.abs(Math.cos(txt.rotation)), sa = Math.abs(Math.sin(txt.rotation));
+        var bw = txt.width * ca + txt.height * sa + 3;
+        var bh = txt.width * sa + txt.height * ca + 3;
+        var box = { x0: txt.x - bw / 2, x1: txt.x + bw / 2,
+                    y0: txt.y - bh / 2, y1: txt.y + bh / 2 };
+        for (var pi3 = 0; pi3 < placed.length; pi3++) {
+          var o = placed[pi3];
+          if (box.x0 < o.x1 && box.x1 > o.x0 && box.y0 < o.y1 && box.y1 > o.y0) {
+            txt.destroy();
+            return;
+          }
+        }
+        placed.push(box);
+
+        // Shop names are clutter at map scale and the point of the street at
+        // walking scale, so they fade in with the zoom rather than being on
+        // all the time.
+        if (isPlace) self.zoomLabels.push(txt);
         self.labelGroup.add(txt);
       });
 
-      // Treasures. The explored grid is 28x16 over the whole territory, so a
-      // cell is roughly a hundred metres across; dropping the find at the cell
-      // centre put acorns inside people's living rooms. Each one is nudged to a
-      // tile in its cell you could actually stand on.
-      var FINDABLE = {};
-      [TILE.grass, TILE.grassFlower, TILE.waste, TILE.dirt,
-       TILE.pave, TILE.paveB, TILE.drive].forEach(function (i) { FINDABLE[i] = 1; });
-      for (var r3 = 0; r3 < GRID_ROWS; r3++) {
-        for (var c3 = 0; c3 < GRID_COLS; c3++) {
-          var cell = state.grid[r3][c3];
-          if (!cell.explored || !cell.treasure) continue;
-          var cx0 = Math.floor((c3 / GRID_COLS) * w.cols), cx1 = Math.ceil(((c3 + 1) / GRID_COLS) * w.cols);
-          var cy0 = Math.floor((r3 / GRID_ROWS) * w.rows), cy1 = Math.ceil(((r3 + 1) / GRID_ROWS) * w.rows);
-          var seed3 = Math.abs((c3 * 7919) ^ (r3 * 104729));
-          var bx = -1, by = -1, tries = 0;
-          while (tries < 60) {
-            var qx = cx0 + Math.floor(seededRandom(seed3 + tries * 3.3) * Math.max(1, cx1 - cx0));
-            var qy = cy0 + Math.floor(seededRandom(seed3 + tries * 7.7 + 1) * Math.max(1, cy1 - cy0));
-            tries++;
-            if (qx < 0 || qy < 0 || qx >= w.cols || qy >= w.rows) continue;
-            if (!FINDABLE[w.data[qy][qx]]) continue;
-            bx = qx; by = qy; break;
-          }
-          if (bx < 0) continue;                   // nowhere sensible in this cell
-          var tx = (bx + 0.5) * TS, ty = (by + 0.5) * TS;
-          var t = this.add.text(tx, ty, cell.treasure, { fontSize: "13px" })
-            .setOrigin(0.5).setDepth(ty + 1);
-          this.treasureGroup.add(t);
-        }
-      }
+      this.drawStops(w, scale);
 
-      // faint record of every walk
-      this.trailGfx = this.trailGfx || this.add.graphics().setDepth(80000);
-      this.trailGfx.clear();
-      this.trailGfx.lineStyle(1, 0x2a2418, 0.18);   // faint; it is history, not a route to follow
-      state.walks.forEach(function (walk, wi2) {
-        // Use the routed version where it has already been worked out, so the
-        // history does not cut through houses the live trail walks around.
-        var drawn = routedIfKnown(wi2) || walk;
-        self.trailGfx.beginPath();
-        drawn.forEach(function (pt, i) {
-          var m = w.toM(pt.lat, pt.lng);
-          if (i === 0) self.trailGfx.moveTo(m.x * scale, m.y * scale);
-          else self.trailGfx.lineTo(m.x * scale, m.y * scale);
-        });
-        self.trailGfx.strokePath();
-      });
+      this.drawHistory(w, scale);
 
       this.liveGfx = this.liveGfx || this.add.graphics().setDepth(80001);
       this.liveGfx.clear();
@@ -2241,6 +2597,66 @@
       cam.roundPixels = true;
       this.worldScale = scale;
       at(1, "Ready");
+    }
+
+    // Everything that depends on which walk is selected, redone against a world
+    // that is already built: the fog, the markers for where he stopped, and the
+    // faint history. Under a tenth of a second against about a second for a
+    // full rebuild.
+    refreshForWalk() {
+      var w = this.worldRef, scale = this.worldScale, self = this;
+      if (!w || !this.layer) return;
+
+      w.recomputeSeen();
+      this.layer.forEachTile(function (tile) { self.tintTile(tile, w); });
+      this.retintSprites(w, 0, 0, w.cols - 1, w.rows - 1);
+      this.lastReveal = null;
+
+      if (this.treasureGroup) this.treasureGroup.clear(true, true);
+      this.drawStops(w, scale);
+      this.drawHistory(w, scale);
+      if (this.liveGfx) this.liveGfx.clear();
+      if (this.dogGfx) this.dogGfx.clear();
+
+      var home = w.toM(state.points[0].lat, state.points[0].lng);
+      if (this.dog) this.dog.setPosition(home.x * scale, home.y * scale);
+    }
+
+    // A marker where he actually stopped, sized by how long he lingered. Only
+    // where the ground has been covered, like everything else.
+    drawStops(w, scale) {
+      var self = this;
+      this.treasureGroup = this.treasureGroup || this.add.group();
+      state.stops.forEach(function (st) {
+        var m = w.toM(st.lat, st.lng);
+        var tx3 = Math.floor(m.x / w.mpt), ty3 = Math.floor(m.y / w.mpt);
+        if (tx3 < 0 || ty3 < 0 || tx3 >= w.cols || ty3 >= w.rows) return;
+        if (!w.seen[ty3 * w.cols + tx3]) return;
+        var size = Math.round(11 + Math.min(9, (st.secs / 60) / 3));
+        var pick = Math.abs(Math.round(st.lat * 1e4) ^ Math.round(st.lng * 1e4)) % TREASURES.length;
+        self.treasureGroup.add(
+          self.add.text(m.x * scale, m.y * scale, TREASURES[pick], { fontSize: size + "px" })
+            .setOrigin(0.5).setDepth(m.y * scale + 1).setResolution(3));
+      });
+    }
+
+    drawHistory(w, scale) {
+      var self = this;
+      this.trailGfx = this.trailGfx || this.add.graphics().setDepth(80000);
+      this.trailGfx.clear();
+      this.trailGfx.lineStyle(1, 0x2a2418, 0.18);   // faint; it is history, not a route to follow
+      state.walks.forEach(function (walk, wi2) {
+        // Use the routed version where it has already been worked out, so the
+        // history does not cut through houses the live trail walks around.
+        var drawn = routedIfKnown(wi2) || walk;
+        self.trailGfx.beginPath();
+        drawn.forEach(function (pt, i) {
+          var m = w.toM(pt.lat, pt.lng);
+          if (i === 0) self.trailGfx.moveTo(m.x * scale, m.y * scale);
+          else self.trailGfx.lineTo(m.x * scale, m.y * scale);
+        });
+        self.trailGfx.strokePath();
+      });
     }
 
     // One tile's colour, given how much of it the dog has seen. Pulled out of
@@ -2391,7 +2807,7 @@
     }
 
     update(time, delta) {
-      this.fitOverlays();
+      this.fitOverlays(delta);
       this.handlePinch();
       if (!pb.playing || !pb.walk) return;
       pb.elapsed += delta * pb.speed;
@@ -2434,7 +2850,8 @@
       // Light and rain follow the walk's own clock and the hour's real weather.
       var now = weatherAt(cur.t);
       this.setTimeOfDay(cur.t, now ? now.cloud : undefined);
-      this.setWeather(now ? now.rain : 0);
+      this.setWeather(now ? now.rain : 0, now ? now.temp : undefined,
+                      now ? now.wind : 0, now ? now.cloud : 0);
 
       var m = w.toM(cur.lat, cur.lng);
       var px = m.x * scale, py = m.y * scale;
@@ -2470,16 +2887,28 @@
       this.dogGfx.fillStyle(0x000000, 0.28);
       this.dogGfx.fillEllipse(px, py + 1, 13, 5);
 
+      // The trail is drawn a segment at a time and shaded by how fast he was
+      // going over it, because that is the one thing in the data you cannot see
+      // from the route alone: where he marched, and where he stopped dead to
+      // read a lamp post for five minutes. Sequential, one hue, and lighter
+      // means faster — on a dark map more light reads as more.
       this.liveGfx.clear();
-      this.liveGfx.lineStyle(2, 0xe8a33d, 0.95);
-      this.liveGfx.beginPath();
       var self = this;
-      travelled.forEach(function (p, i) {
+      var prev = null, prevM = null;
+      travelled.forEach(function (p) {
         var mm = w.toM(p.lat, p.lng);
-        if (i === 0) self.liveGfx.moveTo(mm.x * scale, mm.y * scale);
-        else self.liveGfx.lineTo(mm.x * scale, mm.y * scale);
+        if (prev) {
+          var dt = (new Date(p.t) - new Date(prev.t)) / 1000;
+          var dm = haversineKm(prev, p) * 1000;
+          var kmh = dt > 0 ? (dm / dt) * 3.6 : 0;
+          self.liveGfx.lineStyle(2, paceColour(kmh), 0.95);
+          self.liveGfx.beginPath();
+          self.liveGfx.moveTo(prevM.x * scale, prevM.y * scale);
+          self.liveGfx.lineTo(mm.x * scale, mm.y * scale);
+          self.liveGfx.strokePath();
+        }
+        prev = p; prevM = mm;
       });
-      this.liveGfx.strokePath();
 
       var km = 0;
       for (var k = 1; k < travelled.length; k++) km += haversineKm(travelled[k - 1], travelled[k]);
@@ -2510,16 +2939,22 @@
   }
 
   function updateStats() {
-    var km = 0, treasures = 0, explored = 0;
+    var km = 0, explored = 0;
     state.walks.forEach(function (w) { km += walkKm(w); });
     state.grid.forEach(function (row) {
-      row.forEach(function (c) { if (c.explored) explored++; if (c.explored && c.treasure) treasures++; });
+      row.forEach(function (c) { if (c.explored) explored++; });
     });
+    // Stops count as found once the ground they are on has been covered, so the
+    // number climbs while a walk plays rather than sitting still.
+    var found = state.stops.filter(function (st) {
+      var cell = pointToCell(st, state.territory);
+      return state.grid[cell.row][cell.col].explored;
+    }).length;
     document.getElementById("s-dist").textContent = km.toFixed(1);
     document.getElementById("s-walks").textContent = state.walks.length;
     document.getElementById("s-explored").textContent =
       Math.round((explored / (GRID_ROWS * GRID_COLS)) * 100) + "%";
-    document.getElementById("s-treasure").textContent = treasures;
+    document.getElementById("s-treasure").textContent = found;
     renderWalkList();
   }
 
@@ -2684,7 +3119,7 @@
     hideLoader();
     document.getElementById("transport").classList.add("off");
     if (scene) {
-      scene.setWeather(0);
+      scene.setWeather(0, undefined, 0, 0);
       scene.setFreeCam(false);
       scene.setTimeOfDay(state.points.length ? state.points[0].t : null);
       scene.cameras.main.stopFollow();
@@ -3268,6 +3703,7 @@
     scene: [BootScene, WorldScene]
   });
   window.game = game;   // debug handle
+  window.dogwalk = { state: state, weatherAt: weatherAt };   // for tests
 
   if (window.matchMedia("(max-width: 720px)").matches) {
     document.getElementById("walks").classList.add("hidden");
