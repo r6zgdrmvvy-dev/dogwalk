@@ -78,8 +78,8 @@ async function waitForReady(page) {
                        window.game.scene.getScene("world").fitZoom) < 1e-6,
     }));
     check("splash reaches 100%", boot.pct === "100%", boot.pct);
-    check("bundled walks are found", boot.walks === 2, boot.walks + " rows");
-    check("distance is plausible", boot.km > 1 && boot.km < 40, boot.km + " km");
+    check("bundled walks are found", boot.walks === 6, boot.walks + " rows");
+    check("distance is plausible", boot.km > 5 && boot.km < 40, boot.km + " km");
     check("canvas exists", boot.canvas);
     check("opens zoomed to fit", boot.fitted);
 
@@ -157,6 +157,16 @@ async function waitForReady(page) {
     check("re-centre picks the dog back up", await page.evaluate(
       () => !!window.game.scene.getScene("world").cameras.main._follow));
 
+    // walk list ordering
+    await page.click('#walk-sort .chip[data-sort="longest"]');
+    await page.waitForTimeout(300);
+    const order = await page.$$eval(".walk .m", (els) =>
+      els.map((e) => parseFloat(e.textContent)));
+    const descending = order.every((v, i) => i === 0 || order[i - 1] >= v);
+    check("longest-first ordering", descending, order.join(", "));
+    await page.click('#walk-sort .chip[data-sort="recent"]');
+    await page.waitForTimeout(300);
+
     // stats panel: charts drawn, hue applied, hover readout, table view present
     await page.keyboard.press("Escape");
     await page.click("#btn-stats");
@@ -186,7 +196,7 @@ async function waitForReady(page) {
     await page.click("#btn-table");
     await page.waitForTimeout(300);
     check("table view lists every walk", await page.evaluate(
-      () => document.querySelectorAll("#stats-table tbody tr").length) === 2);
+      () => document.querySelectorAll("#stats-table tbody tr").length) === 6);
     await page.keyboard.press("Escape");
     await page.waitForTimeout(300);
     check("escape closes stats", await page.evaluate(
@@ -205,7 +215,7 @@ async function waitForReady(page) {
     await off.route("https://fonts.googleapis.com/**", (r) => r.abort());
     await off.goto(base);
     await waitForReady(off);
-    check("still playable without a map", (await off.$$(".walk")).length === 2);
+    check("still playable without a map", (await off.$$(".walk")).length === 6);
     check("no page errors", offErrors.length === 0, offErrors.slice(0, 2).join(" | "));
     await off.close();
 

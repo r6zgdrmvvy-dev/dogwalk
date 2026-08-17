@@ -252,6 +252,13 @@
     #hud-bottom { flex-direction: column; align-items: stretch; padding: 6px; gap: 6px; }
     #walks { width: auto; max-height: 24vh; padding: 6px; }
     #walks h3 { margin-bottom: 5px; }
+  .walk .wx { font-size: 11px; opacity: 0.85; }
+  #walk-sort { display: flex; gap: 4px; margin-bottom: 6px; }
+  #walk-sort .chip {
+    background: transparent; color: var(--ink); border: 1px solid var(--panel-edge);
+    border-radius: 20px; padding: 2px 9px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  #walk-sort .chip.on { background: var(--accent-dark); border-color: var(--accent); }
     .walk { padding: 6px 8px; }
     .walk .d { font-size: 12px; }
     .walk .m { font-size: 10px; }
@@ -294,6 +301,11 @@
 <div class="hud" id="hud-bottom">
   <div id="walks">
     <h3><span id="walks-title">Walks</span> <button class="x-btn" id="btn-walks-close" aria-label="Close walks">✕</button></h3>
+    <div id="walk-sort">
+      <button class="chip on" data-sort="recent">Recent</button>
+      <button class="chip" data-sort="longest">Longest</button>
+      <button class="chip" data-sort="wettest">Wettest</button>
+    </div>
     <div id="walk-list"></div>
   </div>
   <div id="transport" class="off">
@@ -374,7 +386,7 @@
   var GRID_COLS = 28, GRID_ROWS = 16;   // coarse grid, only for the explored %
 
   var state = {
-    points: [], walks: [], bounds: null, territory: null, grid: null, activeWalk: -1,
+    points: [], walks: [], bounds: null, territory: null, grid: null, activeWalk: -1, wx: null,
     osmWays: null, dogName: "Your Dog"
   };
 
@@ -551,6 +563,7 @@
     // scene disappears. A single walk is usually about 600m across, which
     // draws at two metres per tile.
     state.bounds = boundsForWalk(state.walks[state.walks.length - 1]);
+    loadWeather();
 
     // "Explored" is a measure of the whole territory the dog has covered, so it
     // is gridded over every walk rather than over whichever one is on screen.
@@ -587,12 +600,16 @@
   // ---- real weather ----------------------------------------------------------
   // Rain used to be a coin flip off the date, which sits badly in a project that
   // otherwise refuses to invent anything. Open-Meteo's archive gives hourly
-  // conditions for a past date, free and without a key, so the weather on screen
-  // is the weather he actually walked in. Past weather never changes, so a day
-  // is cached permanently once fetched.
+  // conditions for past dates, free and without a key, so the weather on screen
+  // is the weather he actually walked in.
+  //
+  // One request covers the whole span of whatever you loaded rather than one per
+  // walk: it is a single call instead of sixty-odd, it is kinder to a free
+  // service that does rate-limit, and it means the walk list and the stats can
+  // show conditions without waiting for you to press play. Past weather never
+  // changes, so a span is cached permanently once fetched.
   var WX_URL = "https://archive-api.open-meteo.com/v1/archive";
-  var WX_KEY = "dogwalk.wx.v1";
-  var wxMem = {};
+  var WX_KEY = "dogwalk.wx.v2";
 
   function wxStore() {
     try { return JSON.parse(localStorage.getItem(WX_KEY) || "{}"); } catch (e) { return {}; }
@@ -604,40 +621,73 @@
     } catch (e) { /* cache is a nicety, not a requirement */ }
   }
 
-  // Hourly weather for one day at one place, keyed loosely enough that walks
-  // from the same neighbourhood share a lookup.
-  function fetchWeather(lat, lng, day) {
-    var key = day + "@" + lat.toFixed(2) + "," + lng.toFixed(2);
-    if (wxMem[key]) return Promise.resolve(wxMem[key]);
+  function fetchWeatherRange(lat, lng, from, to) {
+    var key = from + ".." + to + "@" + lat.toFixed(2) + "," + lng.toFixed(2);
     var cached = wxStore()[key];
-    if (cached) { wxMem[key] = cached; return Promise.resolve(cached); }
+    if (cached) return Promise.resolve(cached);
 
     var url = WX_URL + "?latitude=" + lat.toFixed(4) + "&longitude=" + lng.toFixed(4) +
-      "&start_date=" + day + "&end_date=" + day +
+      "&start_date=" + from + "&end_date=" + to +
       "&hourly=precipitation,temperature_2m,cloud_cover,wind_speed_10m&timezone=UTC";
     var ctl = new AbortController();
-    var timer = setTimeout(function () { ctl.abort(); }, 12000);
+    var timer = setTimeout(function () { ctl.abort(); }, 15000);
     return fetch(url, { signal: ctl.signal })
       .then(function (r) { clearTimeout(timer); if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (d) {
         var h = d && d.hourly;
         if (!h || !h.time || !h.time.length) throw new Error("no hourly data");
-        var out = { time: h.time, rain: h.precipitation, temp: h.temperature_2m,
-                    cloud: h.cloud_cover, wind: h.wind_speed_10m };
-        wxMem[key] = out; wxKeep(key, out);
+        // Read each series defensively. A response missing one of them should
+        // cost that one field, not the whole forecast.
+        var at = function (name, i) {
+          var col = h[name];
+          return col && typeof col[i] === "number" ? col[i] : 0;
+        };
+        var out = {};
+        for (var i = 0; i < h.time.length; i++) {
+          out[h.time[i]] = [at("precipitation", i), at("temperature_2m", i),
+                            at("cloud_cover", i), at("wind_speed_10m", i)];
+        }
+        wxKeep(key, out);
         return out;
       })
-      .catch(function () { clearTimeout(timer); wxMem[key] = null; return null; });
+      .catch(function () { clearTimeout(timer); return null; });
+  }
+
+  // Fetch the conditions for everything currently loaded, once.
+  function loadWeather() {
+    state.wx = null;
+    if (!state.points.length) return Promise.resolve(null);
+    var t0 = new Date(state.points[0].t), t1 = new Date(state.points[state.points.length - 1].t);
+    return fetchWeatherRange(state.points[0].lat, state.points[0].lng,
+                             t0.toISOString().slice(0, 10), t1.toISOString().slice(0, 10))
+      .then(function (wx) {
+        state.wx = wx;
+        if (wx) renderWalkList();
+        return wx;
+      });
   }
 
   // The conditions at one moment. Hours are UTC on both sides, which is what the
-  // tracker records, so no timezone guessing is needed.
-  function weatherAt(wx, iso) {
-    if (!wx) return null;
-    var stamp = new Date(iso).toISOString().slice(0, 14) + "00";
-    var i = wx.time.indexOf(stamp);
-    if (i < 0) i = 0;
-    return { rain: wx.rain[i], temp: wx.temp[i], cloud: wx.cloud[i], wind: wx.wind[i] };
+  // tracker records, so there is no timezone guessing.
+  function weatherAt(iso) {
+    if (!state.wx) return null;
+    var row = state.wx[new Date(iso).toISOString().slice(0, 14) + "00"];
+    if (!row) return null;
+    return { rain: row[0], temp: row[1], cloud: row[2], wind: row[3] };
+  }
+
+  // What a whole walk was like: total rainfall over its hours, and the averages.
+  function weatherOver(walk) {
+    if (!state.wx || !walk || !walk.length) return null;
+    var seen = {}, rain = 0, temp = 0, cloud = 0, n = 0;
+    walk.forEach(function (p) {
+      var k = new Date(p.t).toISOString().slice(0, 14) + "00";
+      if (seen[k] || !state.wx[k]) return;
+      seen[k] = 1;
+      rain += state.wx[k][0]; temp += state.wx[k][1]; cloud += state.wx[k][2]; n++;
+    });
+    if (!n) return null;
+    return { rain: rain, temp: temp / n, cloud: cloud / n, wind: 0 };
   }
 
   // Met Office plain English, roughly: hourly totals rather than rates.
@@ -652,7 +702,16 @@
     else if (w.cloud >= 40) bits.push("cloudy");
     else bits.push("clear");
     if (w.wind >= 38) bits.push("blowing a gale");
-    return Math.round(w.temp) + "°C · " + bits.join(", ");
+    return Math.round(w.temp) + "\u00b0C \u00b7 " + bits.join(", ");
+  }
+
+  function weatherGlyph(w) {
+    if (!w) return "";
+    if (w.rain >= 1) return "\ud83c\udf27";
+    if (w.rain > 0) return "\ud83c\udf26";
+    if (w.cloud >= 85) return "\u2601";
+    if (w.cloud >= 40) return "\u26c5";
+    return "\u2600";
   }
 
   var OVERPASS = [
@@ -727,11 +786,11 @@
       ");out geom;";
   }
 
-  // Two of Guinness's real walks around Giffnock, straight from a Tractive
-  // export: a Saturday morning round the streets and a Thursday teatime one.
-  // Different times of day, so the light differs between them. They ship with
-  // the page so it has something true to play on first load — "Load data"
-  // replaces them with your own dog's.
+  // Six of Guinness's real walks around Giffnock, straight from a Tractive
+  // export, chosen to span the things that make one walk look different from
+  // another: a dawn outing at 05:55 and an evening one at 17:34, four and a half
+  // kilometres down to a five-hundred-metre pootle round the block, and weather
+  // from clear to properly wet. "Load data" replaces them with your own dog's.
   var SAMPLE_WALKS = [
     [
       {"lat":55.797732,"lng":-4.293663,"t":"2026-07-25T10:05:20Z"},
@@ -810,6 +869,63 @@
       {"lat":55.799645,"lng":-4.296051,"t":"2026-07-30T17:45:17Z"},
       {"lat":55.798220,"lng":-4.295138,"t":"2026-07-30T17:47:47Z"},
       {"lat":55.797772,"lng":-4.293541,"t":"2026-07-30T17:50:08Z"}
+    ],
+    [
+      {"lat":55.795718,"lng":-4.291617,"t":"2026-07-31T14:32:44Z"},
+      {"lat":55.795243,"lng":-4.290060,"t":"2026-07-31T14:35:06Z"},
+      {"lat":55.795009,"lng":-4.289127,"t":"2026-07-31T14:37:36Z"},
+      {"lat":55.795059,"lng":-4.289179,"t":"2026-07-31T14:40:05Z"},
+      {"lat":55.795098,"lng":-4.289099,"t":"2026-07-31T14:42:37Z"},
+      {"lat":55.795063,"lng":-4.289130,"t":"2026-07-31T14:45:08Z"},
+      {"lat":55.795023,"lng":-4.289237,"t":"2026-07-31T14:47:37Z"},
+      {"lat":55.795085,"lng":-4.289214,"t":"2026-07-31T14:50:06Z"},
+      {"lat":55.795189,"lng":-4.289522,"t":"2026-07-31T14:52:38Z"},
+      {"lat":55.795382,"lng":-4.290439,"t":"2026-07-31T14:55:04Z"},
+      {"lat":55.796013,"lng":-4.292621,"t":"2026-07-31T14:58:02Z"},
+      {"lat":55.795677,"lng":-4.293754,"t":"2026-07-31T15:00:07Z"}
+    ],
+    [
+      {"lat":55.797859,"lng":-4.292247,"t":"2026-08-03T17:34:31Z"},
+      {"lat":55.798086,"lng":-4.290287,"t":"2026-08-03T17:36:58Z"},
+      {"lat":55.797135,"lng":-4.288270,"t":"2026-08-03T17:39:28Z"},
+      {"lat":55.797545,"lng":-4.286557,"t":"2026-08-03T17:41:58Z"},
+      {"lat":55.798165,"lng":-4.287344,"t":"2026-08-03T17:44:31Z"},
+      {"lat":55.799426,"lng":-4.288929,"t":"2026-08-03T17:47:00Z"},
+      {"lat":55.801023,"lng":-4.290471,"t":"2026-08-03T17:49:32Z"},
+      {"lat":55.800614,"lng":-4.292474,"t":"2026-08-03T17:51:58Z"},
+      {"lat":55.800424,"lng":-4.295237,"t":"2026-08-03T17:54:28Z"},
+      {"lat":55.798682,"lng":-4.296193,"t":"2026-08-03T17:56:59Z"},
+      {"lat":55.796906,"lng":-4.297374,"t":"2026-08-03T17:59:34Z"},
+      {"lat":55.797788,"lng":-4.294991,"t":"2026-08-03T18:02:02Z"},
+      {"lat":55.797069,"lng":-4.293770,"t":"2026-08-03T18:04:30Z"}
+    ],
+    [
+      {"lat":55.797336,"lng":-4.293748,"t":"2026-08-04T07:43:08Z"},
+      {"lat":55.798122,"lng":-4.294986,"t":"2026-08-04T07:45:15Z"},
+      {"lat":55.799727,"lng":-4.295810,"t":"2026-08-04T07:47:47Z"},
+      {"lat":55.801398,"lng":-4.295223,"t":"2026-08-04T07:50:14Z"},
+      {"lat":55.803069,"lng":-4.294859,"t":"2026-08-04T07:52:44Z"},
+      {"lat":55.804360,"lng":-4.294818,"t":"2026-08-04T07:55:39Z"},
+      {"lat":55.803574,"lng":-4.294571,"t":"2026-08-04T07:57:45Z"},
+      {"lat":55.801680,"lng":-4.295057,"t":"2026-08-04T08:00:15Z"},
+      {"lat":55.799610,"lng":-4.295618,"t":"2026-08-04T08:02:51Z"},
+      {"lat":55.798085,"lng":-4.294201,"t":"2026-08-04T08:05:15Z"}
+    ],
+    [
+      {"lat":55.797294,"lng":-4.293823,"t":"2026-08-13T05:55:03Z"},
+      {"lat":55.797916,"lng":-4.292474,"t":"2026-08-13T05:57:30Z"},
+      {"lat":55.797960,"lng":-4.291820,"t":"2026-08-13T06:00:01Z"},
+      {"lat":55.798016,"lng":-4.290370,"t":"2026-08-13T06:02:29Z"},
+      {"lat":55.797553,"lng":-4.288890,"t":"2026-08-13T06:04:59Z"},
+      {"lat":55.796891,"lng":-4.289032,"t":"2026-08-13T06:07:29Z"},
+      {"lat":55.797299,"lng":-4.290086,"t":"2026-08-13T06:09:59Z"},
+      {"lat":55.797952,"lng":-4.291783,"t":"2026-08-13T06:12:30Z"},
+      {"lat":55.798016,"lng":-4.294156,"t":"2026-08-13T06:15:06Z"},
+      {"lat":55.798692,"lng":-4.295442,"t":"2026-08-13T06:17:39Z"},
+      {"lat":55.798298,"lng":-4.296524,"t":"2026-08-13T06:20:03Z"},
+      {"lat":55.797795,"lng":-4.296721,"t":"2026-08-13T06:22:33Z"},
+      {"lat":55.798067,"lng":-4.294760,"t":"2026-08-13T06:25:02Z"},
+      {"lat":55.797491,"lng":-4.293788,"t":"2026-08-13T06:27:33Z"}
     ]
   ];
 
@@ -1772,7 +1888,7 @@
       .then(function () { return scene.buildLevel(lo, hi); });
     return buildChain;
   }
-  var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0, wx: null };
+  var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0 };
 
   class BootScene extends Phaser.Scene {
     constructor() { super("boot"); }
@@ -2316,7 +2432,7 @@
       travelled = travelled.concat([cur]);
 
       // Light and rain follow the walk's own clock and the hour's real weather.
-      var now = weatherAt(pb.wx, cur.t);
+      var now = weatherAt(cur.t);
       this.setTimeOfDay(cur.t, now ? now.cloud : undefined);
       this.setWeather(now ? now.rain : 0);
 
@@ -2407,18 +2523,47 @@
     renderWalkList();
   }
 
+  // Sixty-odd walks is a long scroll with nothing to steer by, so the list can
+  // be ordered by what you are actually looking for.
+  var walkSort = "recent";
+
+  function walkOrder() {
+    var idx = state.walks.map(function (w, i) { return i; });
+    if (walkSort === "longest") {
+      idx.sort(function (a, b) { return walkKm(state.walks[b]) - walkKm(state.walks[a]); });
+    } else if (walkSort === "wettest") {
+      idx.sort(function (a, b) {
+        var wa = weatherOver(state.walks[a]), wb = weatherOver(state.walks[b]);
+        return (wb ? wb.rain : -1) - (wa ? wa.rain : -1);
+      });
+    } else {
+      idx.sort(function (a, b) {
+        return new Date(state.walks[b][0].t) - new Date(state.walks[a][0].t);
+      });
+    }
+    return idx;
+  }
+
   function renderWalkList() {
     var el = document.getElementById("walk-list");
     el.innerHTML = "";
-    state.walks.forEach(function (walk, i) {
+    var wet = document.querySelector('#walk-sort .chip[data-sort="wettest"]');
+    if (wet) wet.style.display = state.wx ? "" : "none";
+    walkOrder().forEach(function (i) {
+      var walk = state.walks[i];
       var mins = Math.round((new Date(walk[walk.length - 1].t) - new Date(walk[0].t)) / 60000);
       var row = document.createElement("div");
       row.className = "walk" + (pb.index === i ? " active" : "");
       // Once a walk has been routed onto the streets we know its real length;
       // straight lines between fixes always cut the corners.
       var shown = (pb.index === i && pb.walk) ? pb.walk : walk;
-      row.innerHTML = '<div><div class="d">' + fmtDate(walk[0].t) + '</div>' +
-        '<div class="m">' + walkKm(shown).toFixed(1) + ' km · ' + mins + ' min</div></div>' +
+      var wx = weatherOver(walk);
+      var glyph = weatherGlyph(wx);
+      row.innerHTML = '<div><div class="d">' + fmtDate(walk[0].t) +
+        (glyph ? ' <span class="wx" title="' + describeWeather(wx) + '">' + glyph + '</span>' : '') +
+        '</div>' +
+        '<div class="m">' + walkKm(shown).toFixed(1) + ' km · ' + mins + ' min' +
+        (wx ? ' · ' + Math.round(wx.temp) + '°C' : '') + '</div></div>' +
         '<div style="font-size:15px">▶</div>';
       row.addEventListener("click", function () { startWalk(i); });
       el.appendChild(row);
@@ -2507,12 +2652,6 @@
     resetProgress();
     setProgress(0, "Fetching the map");
 
-    // The weather he walked in, fetched in parallel with the map. Dry if it
-    // cannot be had — nothing here is invented.
-    pb.wx = null;
-    fetchWeather(walk[0].lat, walk[0].lng, new Date(walk[0].t).toISOString().slice(0, 10))
-      .then(function (wx) { if (pb.index === i) pb.wx = wx; });
-
     focusWorldOn(walk).then(function () {
       if (pb.index !== i) return;              // another walk was picked meanwhile
       recomputeExplored();
@@ -2540,7 +2679,7 @@
   }
 
   function stopWalk() {
-    pb.playing = false; pb.walk = null; pb.index = -1; pb.wx = null;
+    pb.playing = false; pb.walk = null; pb.index = -1;
     state.activeWalk = -1;
     hideLoader();
     document.getElementById("transport").classList.add("off");
@@ -2809,6 +2948,7 @@
       kpi(longest.km.toFixed(1) + " km", "longest walk") +
       kpi((totalKm / days).toFixed(2) + " km", "per day") +
       kpi(((totalKm * 1000) / (totalSecs / 3600) / 1000).toFixed(1) + " km/h", "average pace") +
+      wetTiles(rows) +
       '</div>' +
 
       '<div class="chart"><h3>Distance each day</h3>' +
@@ -2832,6 +2972,21 @@
       this.textContent = t.classList.contains("on") ? "Hide the numbers" : "Show the numbers";
     });
     wireTips(body);
+  }
+
+  // Only shown once the weather for the loaded span has arrived; there is no
+  // placeholder, because a figure that might be wrong is worse than no figure.
+  function wetTiles(rows) {
+    if (!state.wx) return "";
+    var wetKm = 0, wetN = 0, totalKm = 0;
+    rows.forEach(function (r) {
+      totalKm += r.km;
+      var w = weatherOver(state.walks[r.i]);
+      if (w && w.rain > 0) { wetKm += r.km; wetN++; }
+    });
+    if (!wetN) return kpi("none", "walked in the rain");
+    return kpi(wetKm.toFixed(1) + " km", "in the rain") +
+           kpi(Math.round((wetN / rows.length) * 100) + "%", "of walks were wet");
   }
 
   function kpi(value, label) {
@@ -3002,6 +3157,16 @@
   document.getElementById("dog-name").addEventListener("input", function (e) {
     applyDogName(e.target.value);
     if (loadLocal()) saveLocal();          // only if there is already data to attach it to
+  });
+
+  document.querySelectorAll("#walk-sort .chip").forEach(function (chip) {
+    chip.addEventListener("click", function () {
+      walkSort = chip.getAttribute("data-sort");
+      document.querySelectorAll("#walk-sort .chip").forEach(function (c) {
+        c.classList.toggle("on", c === chip);
+      });
+      renderWalkList();
+    });
   });
 
   document.getElementById("btn-stats").addEventListener("click", function () {

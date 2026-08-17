@@ -7,10 +7,11 @@ a scattered treasure along the way.
 
 ## Play it
 
-Open `game.html` in a browser. No build step, no server. It ships with two of
-Guinness's real walks around Giffnock — a Saturday morning round the streets
-and a Thursday teatime one, at different times of day so the light differs
-between them — so there is something true to watch on first load.
+Open `game.html` in a browser. No build step, no server. It ships with six of
+Guinness's real walks around Giffnock, picked to span the things that make one
+walk look different from another: a dawn outing at 05:55 and an evening one at
+17:34, four and a half kilometres down to a five-hundred-metre pootle round the
+block, and weather from clear to properly wet.
 
 Open "Load data" to set your dog's name and load your own walks, either by
 pasting JSON or by picking an exported `.json` file. What you load is kept in
@@ -132,8 +133,11 @@ and only the peak of each chart is labelled — a number on every bar goes unrea
 Every bar has a hover read-out, and "Show the numbers" gives the same data as a
 table so nothing is gated behind colour or a pointer.
 
-On the bundled month that says: 62 walks, 123 km, 44 hours on his paws, 7am is
-far and away his walk time, and Saturday is the biggest day.
+On a full month of real data that says: 62 walks, 123 km, 44 hours on his paws,
+7am is far and away his walk time, and Saturday is the biggest day.
+
+The walk list can be ordered by most recent, longest, or wettest — sixty-odd
+walks is a long scroll with nothing to steer by otherwise.
 
 ### Weather
 
@@ -147,8 +151,12 @@ temperature and conditions are reported next to the clock. Past weather never
 changes, so each day is cached permanently once fetched. If the lookup fails,
 the walk plays dry and says nothing about the weather.
 
-The two bundled walks make the point: 25 July was 16°C, overcast and spitting;
-30 July was clear.
+One request covers the whole span of whatever you loaded rather than one per
+walk — a single call instead of sixty-odd, kinder to a free service that does
+rate-limit, and it means the walk list and the stats can show conditions without
+waiting for you to press play. The list carries a glyph and a temperature per
+walk, can be ordered by wettest, and the stats report how far he walked in the
+rain.
 
 ## Pulling real data from Tractive
 
