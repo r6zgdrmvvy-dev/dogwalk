@@ -109,10 +109,28 @@ frozen second and a half, which is no use to a progress bar and no fun to sit
 through. Progress only ever moves forward, since the three phases report
 independently and do not finish in a fixed order.
 
+Dragging takes the camera off the dog so you can look around mid-walk; the ⌖
+button hands him back. Zooming does the same.
+
 Ground the dog has not covered is shaded rather than blacked out. The walk you
 are watching starts dark and lifts as he actually reaches it, so "explored"
 moves while you watch; everything covered on the other walks stays lit, because
 he really has been there.
+
+### Weather
+
+The rain used to be a coin flip off the walk's date, which sits badly in a
+project that otherwise refuses to invent anything.
+[Open-Meteo's archive](https://open-meteo.com/) gives hourly conditions for a
+past date, free and without a key, so the weather on screen is the weather he
+actually walked in: rainfall drives the shower, cloud cover flattens the light
+(a hundred per cent overcast in Glasgow is not golden hour at any hour), and the
+temperature and conditions are reported next to the clock. Past weather never
+changes, so each day is cached permanently once fetched. If the lookup fails,
+the walk plays dry and says nothing about the weather.
+
+The two bundled walks make the point: 25 July was 16°C, overcast and spitting;
+30 July was clear.
 
 ## Pulling real data from Tractive
 

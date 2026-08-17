@@ -97,6 +97,20 @@ async function waitForReady(page) {
     });
     check("zoom out clamps at fit", clamped);
 
+    // The time-of-day grade is a world-space object: scrollFactor(0) pins it
+    // against scrolling but not against zoom, so it used to shrink to a patch in
+    // the middle of the screen when zoomed out and tint only that.
+    const grade = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world");
+      const v = s.cameras.main.worldView, g = s.grade;
+      return { dx: Math.abs(g.x - v.x), dy: Math.abs(g.y - v.y),
+               dw: Math.abs(g.width - v.width), dh: Math.abs(g.height - v.height),
+               view: Math.round(v.width) };
+    });
+    check("grade covers the whole view when zoomed out",
+          grade.dx < 12 && grade.dy < 12 && grade.dw < 12 && grade.dh < 12,
+          JSON.stringify(grade));
+
     // playback
     await page.click(".walk:nth-child(1)");
     await page.waitForFunction(
@@ -120,6 +134,28 @@ async function waitForReady(page) {
     await page.waitForTimeout(300);
     const paused = await page.evaluate(() => document.getElementById("btn-play").textContent);
     check("space toggles play", paused === "Play", paused);
+
+    // Weather comes from Open-Meteo; the stub is offline so it should fail
+    // gracefully and simply not claim any weather.
+    check("clock survives no weather data", !/NaN|undefined/.test(play.clock), play.clock);
+
+    // Dragging during playback takes the camera off the dog and offers it back.
+    await page.mouse.move(640, 400);
+    await page.mouse.down();
+    await page.mouse.move(400, 260, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    const panned = await page.evaluate(() => ({
+      free: window.game.scene.getScene("world").freeCam,
+      following: !!window.game.scene.getScene("world").cameras.main._follow,
+      btn: getComputedStyle(document.getElementById("btn-follow")).display,
+    }));
+    check("panning releases the camera", panned.free && !panned.following, JSON.stringify(panned));
+    check("re-centre button appears", panned.btn !== "none", panned.btn);
+    await page.click("#btn-follow");
+    await page.waitForTimeout(400);
+    check("re-centre picks the dog back up", await page.evaluate(
+      () => !!window.game.scene.getScene("world").cameras.main._follow));
 
     check("no page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
     await page.close();

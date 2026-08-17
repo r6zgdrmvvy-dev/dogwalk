@@ -78,6 +78,8 @@
     border-radius: 8px; padding: 7px 9px; font: inherit; font-size: 14px;
   }
 
+  #btn-follow.off { display: none; }
+
   #zoom { display: flex; flex-direction: column; gap: 6px; }
   #zoom .btn { width: 38px; text-align: center; font-size: 18px; line-height: 1; padding: 8px 0; }
 
@@ -246,6 +248,7 @@
       <button class="btn" data-speed="2">2×</button>
       <button class="btn" data-speed="4">4×</button>
     </div>
+    <button class="btn off" id="btn-follow" title="Centre on the dog">⌖</button>
     <div id="clock"></div>
     <button class="btn" id="btn-stop">✕</button>
   </div>
@@ -512,6 +515,77 @@
   }
 
   // ---- Overpass ----
+
+  // ---- real weather ----------------------------------------------------------
+  // Rain used to be a coin flip off the date, which sits badly in a project that
+  // otherwise refuses to invent anything. Open-Meteo's archive gives hourly
+  // conditions for a past date, free and without a key, so the weather on screen
+  // is the weather he actually walked in. Past weather never changes, so a day
+  // is cached permanently once fetched.
+  var WX_URL = "https://archive-api.open-meteo.com/v1/archive";
+  var WX_KEY = "dogwalk.wx.v1";
+  var wxMem = {};
+
+  function wxStore() {
+    try { return JSON.parse(localStorage.getItem(WX_KEY) || "{}"); } catch (e) { return {}; }
+  }
+  function wxKeep(key, val) {
+    try {
+      var all = wxStore(); all[key] = val;
+      localStorage.setItem(WX_KEY, JSON.stringify(all));
+    } catch (e) { /* cache is a nicety, not a requirement */ }
+  }
+
+  // Hourly weather for one day at one place, keyed loosely enough that walks
+  // from the same neighbourhood share a lookup.
+  function fetchWeather(lat, lng, day) {
+    var key = day + "@" + lat.toFixed(2) + "," + lng.toFixed(2);
+    if (wxMem[key]) return Promise.resolve(wxMem[key]);
+    var cached = wxStore()[key];
+    if (cached) { wxMem[key] = cached; return Promise.resolve(cached); }
+
+    var url = WX_URL + "?latitude=" + lat.toFixed(4) + "&longitude=" + lng.toFixed(4) +
+      "&start_date=" + day + "&end_date=" + day +
+      "&hourly=precipitation,temperature_2m,cloud_cover,wind_speed_10m&timezone=UTC";
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, 12000);
+    return fetch(url, { signal: ctl.signal })
+      .then(function (r) { clearTimeout(timer); if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) {
+        var h = d && d.hourly;
+        if (!h || !h.time || !h.time.length) throw new Error("no hourly data");
+        var out = { time: h.time, rain: h.precipitation, temp: h.temperature_2m,
+                    cloud: h.cloud_cover, wind: h.wind_speed_10m };
+        wxMem[key] = out; wxKeep(key, out);
+        return out;
+      })
+      .catch(function () { clearTimeout(timer); wxMem[key] = null; return null; });
+  }
+
+  // The conditions at one moment. Hours are UTC on both sides, which is what the
+  // tracker records, so no timezone guessing is needed.
+  function weatherAt(wx, iso) {
+    if (!wx) return null;
+    var stamp = new Date(iso).toISOString().slice(0, 14) + "00";
+    var i = wx.time.indexOf(stamp);
+    if (i < 0) i = 0;
+    return { rain: wx.rain[i], temp: wx.temp[i], cloud: wx.cloud[i], wind: wx.wind[i] };
+  }
+
+  // Met Office plain English, roughly: hourly totals rather than rates.
+  function describeWeather(w) {
+    if (!w) return "";
+    var bits = [];
+    if (w.rain >= 4) bits.push("heavy rain");
+    else if (w.rain >= 1) bits.push("rain");
+    else if (w.rain >= 0.2) bits.push("light rain");
+    else if (w.rain > 0) bits.push("spitting");
+    else if (w.cloud >= 85) bits.push("overcast");
+    else if (w.cloud >= 40) bits.push("cloudy");
+    else bits.push("clear");
+    if (w.wind >= 38) bits.push("blowing a gale");
+    return Math.round(w.temp) + "°C · " + bits.join(", ");
+  }
 
   var OVERPASS = [
     "https://overpass-api.de/api/interpreter",
@@ -1630,7 +1704,7 @@
       .then(function () { return scene.buildLevel(lo, hi); });
     return buildChain;
   }
-  var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0 };
+  var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0, wx: null };
 
   class BootScene extends Phaser.Scene {
     constructor() { super("boot"); }
@@ -1667,20 +1741,29 @@
 
       this.input.on("pointermove", function (p) {
         if (this.input.pointer2 && this.input.pointer2.isDown) return;  // pinching
-        if (!p.isDown || pb.playing) return;
+        if (!p.isDown) return;
+        var dx = p.x - p.prevPosition.x, dy = p.y - p.prevPosition.y;
+        if (!dx && !dy) return;
+        // Dragging during playback takes the camera off the dog rather than
+        // fighting it, and offers a way back.
+        if (pb.playing || pb.walk) this.setFreeCam(true);
         var cam = this.cameras.main;
-        cam.scrollX -= (p.x - p.prevPosition.x) / cam.zoom;
-        cam.scrollY -= (p.y - p.prevPosition.y) / cam.zoom;
+        cam.scrollX -= dx / cam.zoom;
+        cam.scrollY -= dy / cam.zoom;
       }, this);
 
       this.input.on("wheel", function (p, o, dx, dy) {
         var cam = this.cameras.main;
-        self.setZoom((self.targetZoom || cam.zoom) * (dy > 0 ? 0.85 : 1.18), false);
+        this.setZoom((this.targetZoom || cam.zoom) * (dy > 0 ? 0.85 : 1.18), false);
       }, this);
 
-      // Full-screen grade, driven by the real time of day on the walk.
+      // Time-of-day grade over the whole view. It tracks the camera's world
+      // rectangle rather than sitting at a fixed screen size: scrollFactor(0)
+      // pins an object against scrolling but NOT against zoom, so zoomed out it
+      // shrank to a patch in the middle of the screen and tinted only that —
+      // a hard-edged block of daylight sitting in the middle of the map.
       this.grade = this.add.rectangle(0, 0, 10, 10, 0xffffff)
-        .setOrigin(0).setScrollFactor(0).setDepth(400000)
+        .setOrigin(0).setDepth(400000)
         .setBlendMode(Phaser.BlendModes.MULTIPLY);
 
       var rg = this.make.graphics({ add: false });
@@ -1699,15 +1782,22 @@
       if (firstMapIn) hideBoot();
     }
 
+    // Keeps the full-view overlays covering exactly what the camera can see.
+    // Called every frame, because zooming and panning both change that.
     fitOverlays() {
       if (!this.grade) return;
-      this.grade.setSize(this.scale.width, this.scale.height);
-      if (this.rain) this.rain.setPosition(0, 0);
+      var v = this.cameras.main.worldView;
+      if (!v.width || !v.height) return;
+      this.grade.setPosition(v.x, v.y).setSize(v.width, v.height);
+      if (this.rain) {
+        this.rain.setPosition(v.x, v.y - 20 / this.cameras.main.zoom);
+        this.rainWidth = v.width;
+      }
     }
 
     // Warm and low at dawn, flat at midday, amber then blue into the
     // evening. The hour comes from the walk's own timestamps.
-    setTimeOfDay(iso) {
+    setTimeOfDay(iso, cloud) {
       if (!this.grade) return;
       var h = iso ? new Date(iso).getHours() + new Date(iso).getMinutes() / 60 : 12;
       var stops = [
@@ -1720,25 +1810,53 @@
         if (h >= stops[i][0] && h <= stops[i + 1][0]) { a = stops[i]; b2 = stops[i + 1]; break; }
       }
       var t = b2[0] === a[0] ? 0 : (h - a[0]) / (b2[0] - a[0]);
-      this.grade.fillColor = mixHex(a[1], b2[1], t);
+      var tint = mixHex(a[1], b2[1], t);
+      // Cloud flattens the light: a hundred per cent overcast in Glasgow is not
+      // golden hour at any time of day, so the warm cast is pulled out and the
+      // whole thing dimmed a little.
+      if (typeof cloud === "number") {
+        var f = Math.max(0, Math.min(1, cloud / 100)) * 0.75;
+        tint = mixHex(tint, 0x9aa2ae, f);
+      }
+      this.grade.fillColor = tint;
     }
 
-    setWeather(wet) {
-      if (wet && !this.rain) {
-        this.rain = this.add.particles(0, 0, "raindrop", {
-          x: { min: -80, max: this.scale.width + 80 },
-          y: -20,
-          lifespan: 1100,
-          speedY: { min: 620, max: 820 },
-          speedX: { min: -110, max: -60 },
-          quantity: 3,
-          alpha: { start: 0.42, end: 0.08 },
-          scaleY: { min: 0.7, max: 1.5 }
-        }).setScrollFactor(0).setDepth(399000);
-      } else if (!wet && this.rain) {
-        this.rain.destroy();
-        this.rain = null;
+    // `mm` is the hour's rainfall. Anything at all shows, but a shower and a
+    // downpour should not look the same.
+    //
+    // The emitter lives in world space and is sized off the camera, for the same
+    // reason as the grade: a screen-fixed emitter still gets scaled by zoom, so
+    // zoomed out the rain fell in a small patch in the middle of the map. Speeds
+    // and drop sizes are divided by the zoom so a shower looks like a shower
+    // however far out you are, and it is rebuilt when the zoom moves far enough
+    // for that to matter.
+    setWeather(mm) {
+      if (!(mm > 0)) {
+        if (this.rain) { this.rain.destroy(); this.rain = null; }
+        return;
       }
+      var cam = this.cameras.main, z = cam.zoom || 1;
+      var heavy = Math.max(0, Math.min(1, mm / 4));
+      var quantity = Math.max(1, Math.round(1 + heavy * 7));
+      var reuse = this.rain && this.rainZoom && Math.abs(z / this.rainZoom - 1) < 0.25;
+      if (!reuse) {
+        if (this.rain) this.rain.destroy();
+        var v = cam.worldView;
+        this.rainZoom = z;
+        this.rain = this.add.particles(0, 0, "raindrop", {
+          x: { min: -40 / z, max: (v.width || this.scale.width) + 40 / z },
+          y: 0,
+          lifespan: 1100,
+          speedY: { min: 620 / z, max: 820 / z },
+          speedX: { min: -110 / z, max: -60 / z },
+          quantity: quantity,
+          alpha: { start: 0.42, end: 0.08 },
+          scaleX: 1 / z,
+          scaleY: { min: 0.7 / z, max: 1.5 / z }
+        }).setDepth(399000);
+      }
+      this.rain.quantity = quantity;
+      this.rain.setAlpha(0.45 + heavy * 0.45);
     }
 
     // Rebuilt whenever the walk data changes. Async so the browser can paint
@@ -2067,14 +2185,29 @@
       // so drop the follow and show the whole map again
       var next = this.setZoom((this.targetZoom || this.cameras.main.zoom) * factor, true);
       if (next <= (this.fitZoom || 0) * 1.02) {
-        this.cameras.main.stopFollow();
+        this.setFreeCam(true);
         this.cameras.main.centerOn(this.worldRef.cols * TS / 2, this.worldRef.rows * TS / 2);
-      } else if (pb.playing && this.dog) {
+      } else if (pb.walk && this.dog && !this.freeCam) {
         this.cameras.main.startFollow(this.dog, true, 0.09, 0.09);
       }
     }
 
+    // Free camera: you have taken hold of the view, so it stops chasing the dog
+    // until you ask it to pick him up again.
+    setFreeCam(free) {
+      this.freeCam = !!free;
+      var btn = document.getElementById("btn-follow");
+      if (free) {
+        this.cameras.main.stopFollow();
+        if (btn && pb.walk) btn.classList.remove("off");
+      } else {
+        if (this.dog) this.cameras.main.startFollow(this.dog, true, 0.09, 0.09);
+        if (btn) btn.classList.add("off");
+      }
+    }
+
     update(time, delta) {
+      this.fitOverlays();
       this.handlePinch();
       if (!pb.playing || !pb.walk) return;
       pb.elapsed += delta * pb.speed;
@@ -2089,6 +2222,7 @@
       var d = Phaser.Math.Distance.Between(p1.x, p1.y, p2.x, p2.y);
       if (this.pinchDist && d > 0) {
         var cam = this.cameras.main;
+        if (pb.walk) this.setFreeCam(true);
         this.setZoom(cam.zoom * (d / this.pinchDist), false);
       }
       this.pinchDist = d;
@@ -2112,7 +2246,11 @@
         break;
       }
       travelled = travelled.concat([cur]);
-      this.setTimeOfDay(cur.t);          // light follows the walk's own clock
+
+      // Light and rain follow the walk's own clock and the hour's real weather.
+      var now = weatherAt(pb.wx, cur.t);
+      this.setTimeOfDay(cur.t, now ? now.cloud : undefined);
+      this.setWeather(now ? now.rain : 0);
 
       var m = w.toM(cur.lat, cur.lng);
       var px = m.x * scale, py = m.y * scale;
@@ -2162,8 +2300,9 @@
       var km = 0;
       for (var k = 1; k < travelled.length; k++) km += haversineKm(travelled[k - 1], travelled[k]);
       document.getElementById("scrub").value = Math.round(progress * 1000);
+      var wxText = describeWeather(now);
       document.getElementById("clock").textContent =
-        fmtTime(cur.t) + "  ·  " + km.toFixed(2) + " km";
+        fmtTime(cur.t) + "  ·  " + km.toFixed(2) + " km" + (wxText ? "  ·  " + wxText : "");
     }
   }
 
@@ -2300,6 +2439,12 @@
     resetProgress();
     setProgress(0, "Fetching the map");
 
+    // The weather he walked in, fetched in parallel with the map. Dry if it
+    // cannot be had — nothing here is invented.
+    pb.wx = null;
+    fetchWeather(walk[0].lat, walk[0].lng, new Date(walk[0].t).toISOString().slice(0, 10))
+      .then(function (wx) { if (pb.index === i) pb.wx = wx; });
+
     focusWorldOn(walk).then(function () {
       if (pb.index !== i) return;              // another walk was picked meanwhile
       recomputeExplored();
@@ -2319,21 +2464,21 @@
       if (scene) {
         scene.lastReveal = null;
         scene.dog.play("trot");
-        scene.setWeather(seededRandom(new Date(walk[0].t).getDate() * 3.7) < 0.42);
         scene.applyProgress(0);
         scene.setZoom(3, true);
-        scene.cameras.main.startFollow(scene.dog, true, 0.09, 0.09);
+        scene.setFreeCam(false);
       }
     });
   }
 
   function stopWalk() {
-    pb.playing = false; pb.walk = null; pb.index = -1;
+    pb.playing = false; pb.walk = null; pb.index = -1; pb.wx = null;
     state.activeWalk = -1;
     hideLoader();
     document.getElementById("transport").classList.add("off");
     if (scene) {
-      scene.setWeather(false);
+      scene.setWeather(0);
+      scene.setFreeCam(false);
       scene.setTimeOfDay(state.points.length ? state.points[0].t : null);
       scene.cameras.main.stopFollow();
       scene.liveGfx.clear();
@@ -2564,6 +2709,10 @@
   document.getElementById("dog-name").addEventListener("input", function (e) {
     applyDogName(e.target.value);
     if (loadLocal()) saveLocal();          // only if there is already data to attach it to
+  });
+
+  document.getElementById("btn-follow").addEventListener("click", function () {
+    if (scene) scene.setFreeCam(false);
   });
 
   document.getElementById("btn-zoom-in").addEventListener("click", function () {
