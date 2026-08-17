@@ -16,6 +16,10 @@
   "kerbW": 14,
   "pave": 9,
   "paveB": 10,
+  "people": {
+    "her": 0,
+    "him": 4
+  },
   "props": {
     "bench": 11,
     "bin": 9,

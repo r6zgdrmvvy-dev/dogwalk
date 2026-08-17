@@ -20,7 +20,8 @@ pasting JSON or by picking an exported `.json` file. What you load is kept in
 with the ▶ button.
 
 Keyboard: space plays and pauses, left/right scrub, up/down change speed,
-`+`/`-` zoom, Escape stops.
+`+`/`-` zoom, Escape stops. While roaming the arrow keys walk you about instead
+— see below.
 
 Expected data shape — an array of GPS points:
 
@@ -133,6 +134,42 @@ A world is kept once built. Nearby walks snap to the same 200m grid of bounds,
 so playing a second walk around the same streets re-lights the fog and redraws
 the trail rather than rebuilding the whole town, and picking up a walk you have
 already watched is close to instant.
+
+### Roaming
+
+"Roam" hands you the lead. You pick who is walking — her or him — and then you
+walk the real streets yourself, with the dog following you rather than the other
+way round.
+
+`WASD` or the arrow keys, shift to jog, Escape to finish. On a phone a drag is a
+thumbstick that anchors wherever you put your thumb down, rather than panning
+the camera — panning away from yourself mid-walk is not something you want, and
+a stick parked in a corner is not something you can reach.
+
+You start on the pavement outside his home, not in the middle of the road and
+not in the back garden: his home fix usually falls inside the footprint of his
+own house, and the nearest tile that merely is not a wall tends to be a garden
+hemmed in on three sides. Buildings and water are solid, and walking into a wall
+at an angle slides you along it. Hedges and garden walls are not solid, because
+they are a tile thick and blocking them would turn every front garden into a
+maze.
+
+The dog follows on breadcrumbs rather than on a straight line to you — he walks
+where you walked, which keeps him out of the hedges and takes him round corners
+instead of through them. He trails about three and a half metres back, hurries
+when he has dropped behind and ambles when he is close, and when you stand still
+for a couple of seconds he goes off and has a sniff at something nearby.
+
+The bar reads out how far you have walked and where you are, off the same OSM
+names the map is lettered with — "outside the library" if you are next to a
+named place, the street otherwise. Ground you cover yourself counts as explored
+exactly like ground he covered on a real walk, because you were both actually
+there; it is kept in lat/lng so it survives the world being rebuilt around a
+different walk, and saved to `localStorage` so an afternoon of exploring is
+still there tomorrow.
+
+The light follows your own clock, since this walk is happening now rather than
+in the archive.
 
 ### Shops, houses and the rest
 
@@ -288,6 +325,14 @@ siding), and one felted flat roof for shops and flats. The flat one is drawn as
 its own thing rather than slates in grey, because that is the whole point of it:
 a bitumen membrane in overlapping strips, ponding where it never lies flat, the
 odd rooflight, and a coping-stone parapet where it ends.
+
+The two walkers are drawn facing east and rotated to their heading at runtime,
+exactly as the dog is — one four-frame cycle covers every direction, and it
+keeps the pair of them looking like they belong in the same world. From directly
+above, a person is hair, shoulders, a coat and the tips of two shoes, so that is
+what has to carry it: the arms swing outside the coat because they are the only
+moving parts you can see, and the shoulders are wide across and narrow front to
+back. An earlier version had that the other way round and drew a small car.
 
 Ground tiles are 16px; props (parked cars, lamp posts, bins, pillar boxes,
 benches) are authored on 32px frames — two tiles across — so a car comes out

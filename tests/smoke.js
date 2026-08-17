@@ -285,6 +285,98 @@ async function waitForReady(page) {
     check("escape closes stats", await page.evaluate(
       () => getComputedStyle(document.getElementById("stats-panel")).display === "none"));
 
+    // Free roam: you walk, he follows. Frame rate under a headless browser is
+    // nothing like 60fps, so distances are checked as rates against the clock
+    // actually elapsed rather than against the wall clock.
+    await page.keyboard.press("Escape");
+    await page.click("#btn-roam");
+    await page.waitForTimeout(300);
+    check("roam offers a choice of walker", await page.evaluate(() =>
+      document.getElementById("roam-panel").classList.contains("open") &&
+      document.querySelectorAll("#roam-who .who").length === 2));
+    await page.click('#roam-who .who[data-who="him"]');
+    await page.click("#btn-roam-go");
+    await page.waitForTimeout(1200);
+
+    const roamProbe = () => page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      return { on: r.on, x: r.x, y: r.y, metres: r.metres,
+               gap: Math.hypot(r.x - r.dog.x, r.y - r.dog.y),
+               inWall: s.blocked(r.x, r.y), dogInWall: s.solidAt(r.dog.x, r.dog.y),
+               follow: !!s.cameras.main._follow, anim: s.walker.anims.currentAnim.key,
+               where: document.getElementById("roam-where").textContent };
+    });
+    const r0 = await roamProbe();
+    check("roaming starts on open ground", r0.on && !r0.inWall, JSON.stringify(r0));
+    check("camera follows the walker", r0.follow);
+
+    // Whichever way is actually open — a real start point is on a pavement,
+    // which may run north-south, so "east" is not guaranteed to be walkable.
+    const way = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      const dirs = [["ArrowRight", 1, 0], ["ArrowLeft", -1, 0],
+                    ["ArrowDown", 0, 1], ["ArrowUp", 0, -1]];
+      for (const [key, dx, dy] of dirs) {
+        if (!s.blocked(r.x + dx * 4, r.y + dy * 4)) return { key, dx, dy };
+      }
+      return null;
+    });
+    check("there is somewhere to walk from the start", !!way, JSON.stringify(way));
+    await page.keyboard.down(way.key);
+    await page.waitForTimeout(2500);
+    const rMid = await roamProbe();
+    await page.keyboard.up(way.key);
+    await page.waitForTimeout(400);
+    const r1 = await roamProbe();
+    check("the walk cycle plays while moving", rMid.anim === "walk-him", rMid.anim);
+    check("standing still stops the cycle", r1.anim === "stand-him", r1.anim);
+    const gone = Math.hypot(r1.x - r0.x, r1.y - r0.y);
+    check("walking covers ground", r1.metres > 1 && gone > 1,
+          r1.metres.toFixed(1) + "m walked, " + gone.toFixed(1) + "m from the start");
+    check("the dog trails a few metres behind", r1.gap > 0.4 && r1.gap < 9,
+          r1.gap.toFixed(1) + "m");
+    check("neither of them is inside a building", !r1.inWall && !r1.dogInWall);
+    check("the readout names the street", /\w/.test(r1.where), r1.where);
+
+    // Walked straight into a wall: you stop at it, you do not pass through it.
+    const wall = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), w = s.worldRef, r = window.dogwalk.roam;
+      let best = null, bd = 1e9;
+      for (let ty = 0; ty < w.rows; ty++) for (let tx = 0; tx < w.cols; tx++) {
+        if (!w.solid[ty * w.cols + tx]) continue;
+        const mx = (tx + 0.5) * w.mpt, my = (ty + 0.5) * w.mpt;
+        const d = Math.hypot(mx - r.x, my - r.y);
+        if (d < bd) { bd = d; best = [mx, my]; }
+      }
+      if (!best) return null;
+      for (let d = 2; d < 30; d += 0.5) {
+        const x = best[0] - d, y = best[1];
+        if (!s.blocked(x, y)) { r.x = x; r.y = y; return { faced: true }; }
+      }
+      return null;
+    });
+    if (wall) {
+      await page.keyboard.down("ArrowRight");
+      await page.waitForTimeout(3000);
+      await page.keyboard.up("ArrowRight");
+      const r2 = await roamProbe();
+      check("you cannot walk through a building", !r2.inWall, JSON.stringify({
+        x: r2.x.toFixed(1), inWall: r2.inWall }));
+    }
+
+    // Ground you covered yourself counts as explored, and survives a reload.
+    await page.click("#btn-roam-stop");
+    await page.waitForTimeout(500);
+    const after = await page.evaluate(() => ({
+      on: window.dogwalk.roam.on,
+      barOff: document.getElementById("roam-bar").classList.contains("off"),
+      roamed: window.dogwalk.state.roamed.length,
+      saved: JSON.parse(localStorage.getItem("dogwalk.roamed.v1") || "[]").length,
+    }));
+    check("finishing puts the map back", !after.on && after.barOff, JSON.stringify(after));
+    check("where you walked is remembered", after.roamed > 0 && after.saved === after.roamed,
+          JSON.stringify(after));
+
     check("no page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
     await page.close();
 
@@ -334,6 +426,50 @@ async function waitForReady(page) {
       const c = document.querySelector("#stats-panel .card");
       return c.scrollWidth <= window.innerWidth + 1;
     }));
+    await m.keyboard.press("Escape");
+    await m.waitForTimeout(300);
+
+    // On a phone the only control is a thumbstick under your finger, so a drag
+    // has to steer rather than pan the camera away from yourself.
+    await m.tap("#btn-roam");
+    await m.waitForTimeout(400);
+    check("roam panel fits the phone", await m.evaluate(() => {
+      const c = document.querySelector("#roam-panel .card");
+      return c.scrollWidth <= window.innerWidth + 1;
+    }));
+    await m.tap("#btn-roam-go");
+    await m.waitForTimeout(1200);
+    const before = await m.evaluate(() => {
+      const r = window.dogwalk.roam;
+      return { x: r.x, y: r.y };
+    });
+    const box = await m.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+    const mway = await m.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        if (!s.blocked(r.x + dx * 4, r.y + dy * 4)) return { dx, dy };
+      }
+      return { dx: 1, dy: 0 };
+    });
+    await m.mouse.move(box.w / 2, box.h / 2);
+    await m.mouse.down();
+    await m.mouse.move(box.w / 2 + mway.dx * 70, box.h / 2 + mway.dy * 70, { steps: 4 });
+    await m.waitForTimeout(1800);
+    const stickOn = await m.evaluate(() =>
+      document.getElementById("stick").classList.contains("on"));
+    await m.mouse.up();
+    await m.waitForTimeout(300);
+    const moved = await m.evaluate(() => {
+      const r = window.dogwalk.roam; return { x: r.x, y: r.y };
+    });
+    const mgone = Math.hypot(moved.x - before.x, moved.y - before.y);
+    check("the thumbstick appears under your finger", stickOn);
+    check("dragging steers instead of panning", mgone > 0.5, mgone.toFixed(1) + "m");
+    check("the stick clears when you let go", await m.evaluate(() =>
+      !document.getElementById("stick").classList.contains("on") &&
+      !window.dogwalk.roam.stick));
+    await m.tap("#btn-roam-stop");
+    await m.waitForTimeout(300);
     check("no page errors", mErrors.length === 0, mErrors.slice(0, 2).join(" | "));
   } finally {
     await browser.close();

@@ -685,6 +685,115 @@ def bench():
     return pshadow(im, 2, 2, 80)
 
 
+# ------------------------------------------------------------------ people ---
+WT = 16           # walker frame, same size as the dog's
+
+# Two people to pick from. Seen from directly above you get hair, shoulders,
+# a coat and the tips of two shoes, so that is what has to carry the read:
+# hair colour and length, and the colour of the coat.
+WALKERS = [
+    {"key": "her",
+     "hair": [(58, 34, 22), (86, 52, 30), (118, 74, 42)],
+     "coat": [(96, 38, 52), (132, 56, 72), (170, 84, 100)],
+     "skin": (214, 168, 134), "long": True},
+    {"key": "him",
+     "hair": [(38, 32, 28), (58, 50, 44), (82, 72, 64)],
+     "coat": [(38, 62, 88), (54, 84, 116), (78, 112, 148)],
+     "skin": (222, 180, 146), "long": False},
+]
+
+
+def walker(spec, frame):
+    """One frame of a person walking, seen from above and facing east.
+
+    Rotated to the heading at runtime, exactly like the dog — which is what
+    keeps the two of them looking like they belong in the same world, and means
+    one four-frame cycle covers every direction.
+
+    The cycle is a contra-swing: arms and legs opposite, mid-stride on the odd
+    frames and passing on the even ones, so it reads as walking rather than
+    shuffling. Frame 0 doubles as standing still.
+    """
+    im = Image.new("RGBA", (WT, WT), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    hair, coat, skin = spec["hair"], spec["coat"], spec["skin"]
+    EDGE = (28, 26, 32)
+
+    def r(x0, y0, x1, y1, c):
+        d.rectangle([max(0, x0), max(0, y0), min(WT - 1, x1), min(WT - 1, y1)], fill=c)
+
+    # swing: -1 trailing, +1 leading. Legs oppose arms.
+    swing = [0, 1, 0, -1][frame % 4]
+
+    # Shoes, stepping out from under the hem at the back of the coat.
+    r(4 + swing, 5, 5 + swing, 6, (44, 40, 38))
+    r(4 - swing, 9, 5 - swing, 10, (44, 40, 38))
+
+    # Arms swinging clear of the shoulders, opposite the legs. Seen from above
+    # they are the only moving parts that carry the walk, so they sit outside
+    # the coat rather than being lost against it.
+    r(6 - swing, 3, 8 - swing, 4, coat[0])
+    r(6 + swing, 11, 8 + swing, 12, coat[0])
+
+    # Coat. A person from above is wide across the shoulders and narrow front
+    # to back — the opposite way round from a car, which is what an earlier
+    # version drew and which is exactly what it looked like.
+    r(5, 5, 10, 10, coat[1])
+    r(6, 4, 10, 4, coat[1])                                 # shoulder line
+    r(6, 11, 10, 11, coat[0])                               # and its shadow
+    r(6, 4, 9, 4, coat[2])                                  # lit north edge
+    r(5, 10, 10, 10, coat[0])
+    r(4, 6, 4, 9, coat[0])                                  # hem, trailing west
+    for cx, cy in ((5, 4), (5, 11), (11, 5), (11, 10)):     # knock the corners
+        im.putpixel((cx, cy), (0, 0, 0, 0))
+
+    # Head, drawn over the shoulders. Light is fixed north-west, so the north
+    # of the crown catches it and the south falls away.
+    r(8, 5, 11, 9, hair[1])
+    r(8, 5, 11, 5, hair[2])
+    r(9, 9, 11, 9, hair[0])
+    r(12, 6, 12, 8, skin)                                   # face, looking east
+    r(12, 6, 12, 6, (skin[0] - 30, skin[1] - 30, skin[2] - 30))
+    if spec["long"]:
+        r(7, 4, 8, 10, hair[1])                             # hair past the collar
+        r(7, 4, 8, 4, hair[2])
+        r(7, 10, 8, 10, hair[0])
+
+    # A dark edge along the south and east, where the ground behind is lit.
+    # Without it the figure dissolves into the pavement at walking zoom. Read
+    # off a snapshot, not off the image being written to — growing the edge from
+    # its own output floods the whole frame.
+    solid = [[im.getpixel((x, y))[3] >= 128 for y in range(WT)] for x in range(WT)]
+    for y in range(WT):
+        for x in range(WT):
+            if solid[x][y]:
+                continue
+            if (x > 0 and solid[x - 1][y]) or (y > 0 and solid[x][y - 1]):
+                im.putpixel((x, y), EDGE + (190,))
+
+    # Cast shadow, south-east and dithered at its edge, matching the props.
+    sh = Image.new("RGBA", (WT, WT), (0, 0, 0, 0))
+    for y in range(WT):
+        for x in range(WT):
+            sx, sy = x - 1, y - 1
+            if not (0 <= sx < WT and 0 <= sy < WT):
+                continue
+            if im.getpixel((sx, sy))[3] < 128 or (x + y) % 4 == 3:
+                continue
+            sh.putpixel((x, y), (16, 18, 26, 92))
+    sh.alpha_composite(im)
+    return sh
+
+
+def build_people():
+    frames, index = [], {}
+    for spec in WALKERS:
+        index[spec["key"]] = len(frames)
+        for f in range(4):
+            frames.append(walker(spec, f))
+    return frames, index
+
+
 def build_props():
     props, index = [], {}
     index["carEW"] = []
@@ -770,6 +879,13 @@ def build():
         psheet.paste(im, ((i % COLS) * PT, (i // COLS) * PT))
     psheet.save(os.path.join(here, "assets", "props.png"))
 
+    people, plindex = build_people()
+    plsheet = Image.new("RGBA", (len(people) * WT, WT), (0, 0, 0, 0))
+    for i, im in enumerate(people):
+        plsheet.paste(im, (i * WT, 0))
+    plsheet.save(os.path.join(here, "assets", "people.png"))
+    index["people"] = plindex
+
     index["_count"] = len(tiles)
     index["_cols"] = COLS
     index["_size"] = T
@@ -777,8 +893,9 @@ def build():
     with open(os.path.join(here, "assets", "city-index.json"), "w") as f:
         json.dump(index, f, indent=2, sort_keys=True)
     pindex["_size"] = PT
-    print("wrote %d tiles (%dx%d) and %d props (%dx%d)"
-          % (len(tiles), COLS * T, rows * T, len(props), COLS * PT, prows * PT))
+    print("wrote %d tiles (%dx%d), %d props (%dx%d) and %d walker frames"
+          % (len(tiles), COLS * T, rows * T, len(props), COLS * PT, prows * PT,
+             len(people)))
     print(json.dumps(index, sort_keys=True))
 
 

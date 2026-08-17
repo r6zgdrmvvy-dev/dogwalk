@@ -160,6 +160,59 @@
   .speed { display: flex; gap: 3px; }
   .speed .btn { padding: 5px 8px; font-size: 12px; }
   .speed .btn.on { background: var(--accent); color: #2a1c0a; border-color: var(--accent-dark); }
+  .btn.on { background: var(--accent); color: #2a1c0a; border-color: var(--accent-dark); }
+
+  /* ---------- roaming ---------- */
+  #roam-bar {
+    background: var(--panel); border: 2px solid var(--panel-edge); border-radius: 12px;
+    padding: 8px 10px; display: flex; align-items: center; gap: 12px; flex: 1; max-width: 560px;
+  }
+  #roam-bar.off { display: none; }
+  .roam-read { display: flex; flex-direction: column; line-height: 1.15; min-width: 96px; }
+  .roam-read b { font-size: 18px; color: var(--accent); }
+  .roam-read span { font-size: 11px; opacity: 0.7; }
+  #roam-keys { flex: 1; font-size: 11px; opacity: 0.6; display: flex; align-items: center; gap: 4px; }
+  #roam-keys kbd {
+    border: 1px solid var(--panel-edge); border-radius: 4px; padding: 1px 5px;
+    font: inherit; font-size: 10px; background: rgba(255,255,255,0.05);
+  }
+  #roam-keys span { margin-left: 4px; }
+
+  /* The thumbstick only exists while a finger is down, and is drawn where the
+     finger landed rather than parked in a corner. */
+  #stick {
+    position: fixed; z-index: 20; width: 108px; height: 108px; margin: -54px 0 0 -54px;
+    border: 2px solid rgba(244, 234, 214, 0.35); border-radius: 50%;
+    background: rgba(20, 16, 12, 0.25); display: none; pointer-events: none;
+  }
+  #stick.on { display: block; }
+  #stick i {
+    position: absolute; left: 50%; top: 50%; width: 40px; height: 40px;
+    margin: -20px 0 0 -20px; border-radius: 50%;
+    background: rgba(244, 234, 214, 0.5);
+  }
+
+  #roam-panel {
+    position: fixed; z-index: 45; inset: 0; display: none;
+    background: rgba(8, 6, 4, 0.78); padding: 20px; overflow: auto;
+  }
+  #roam-panel.open { display: flex; align-items: center; justify-content: center; }
+  #roam-panel .card {
+    background: #1c1713; border: 2px solid var(--panel-edge); border-radius: 14px;
+    padding: 18px; width: min(400px, 100%);
+  }
+  #roam-panel h3 { margin: 0 0 6px; font-size: 18px; }
+  #roam-panel p { margin: 0 0 14px; font-size: 13px; opacity: 0.75; line-height: 1.45; }
+  #roam-panel .row { display: flex; gap: 8px; margin-top: 16px; }
+  #roam-who { display: flex; gap: 10px; }
+  .who {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.03); border: 2px solid var(--panel-edge);
+    border-radius: 10px; padding: 10px; color: inherit; font: inherit; cursor: pointer;
+  }
+  .who span { font-size: 13px; }
+  .who.on { border-color: var(--accent); background: rgba(232, 163, 61, 0.12); }
+  .who canvas { image-rendering: pixelated; width: 48px; height: 48px; }
 
   #toast {
     position: fixed; z-index: 30; left: 50%; top: 74px; transform: translateX(-50%);
@@ -274,6 +327,10 @@
     .speed .btn { padding: 7px 6px; font-size: 11px; }
     #scrub { min-width: 60px; height: 24px; }
     #clock { display: none; }              /* the walk list already dates it */
+
+    #roam-bar { max-width: none; gap: 8px; padding: 6px; }
+    #roam-keys kbd, #roam-keys .k-only { display: none; }   /* no keyboard to press */
+    #roam-keys { font-size: 10px; }
   }
 
   @media (max-width: 420px) {
@@ -295,6 +352,7 @@
   </div>
   <div style="display:flex;gap:8px;align-items:flex-start;">
     <button class="btn" id="btn-walks">Walks</button>
+    <button class="btn" id="btn-roam">Roam</button>
     <button class="btn" id="btn-stats">Stats</button>
     <button class="btn" id="btn-data">Load data</button>
     <div id="zoom">
@@ -314,6 +372,13 @@
     </div>
     <div id="walk-list"></div>
   </div>
+  <div id="roam-bar" class="off">
+    <div class="roam-read"><b id="roam-dist">0 m</b><span id="roam-where">out for a walk</span></div>
+    <div id="roam-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+      <span class="k-only">or</span><span>drag to walk</span>
+      <span class="k-only">&middot; hold shift to jog</span></div>
+    <button class="btn" id="btn-roam-stop">Finish</button>
+  </div>
   <div id="transport" class="off">
     <button class="btn primary" id="btn-play">Pause</button>
     <input type="range" id="scrub" min="0" max="1000" value="0">
@@ -329,6 +394,24 @@
     <button class="btn off" id="btn-follow" title="Centre on the dog">⌖</button>
     <div id="clock"></div>
     <button class="btn" id="btn-stop">✕</button>
+  </div>
+</div>
+
+<div id="stick"><i></i></div>
+
+<div id="roam-panel">
+  <div class="card">
+    <h3 id="roam-head">Take him out yourself</h3>
+    <p id="roam-blurb">Walk the real streets he knows and he will follow you.
+      Pick who is holding the lead.</p>
+    <div id="roam-who">
+      <button class="who on" data-who="her"><canvas width="48" height="48"></canvas><span>Her</span></button>
+      <button class="who" data-who="him"><canvas width="48" height="48"></canvas><span>Him</span></button>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="btn-roam-go">Off we go</button>
+      <button class="btn" id="btn-roam-cancel">Not now</button>
+    </div>
   </div>
 </div>
 
@@ -425,7 +508,7 @@
 
   var state = {
     points: [], walks: [], bounds: null, territory: null, grid: null, activeWalk: -1, wx: null,
-    stops: [],
+    stops: [], roamed: [],
     osmWays: null, dogName: "Your Dog"
   };
 
@@ -1424,6 +1507,14 @@
                y: (b.maxLat - lat) * 111320 + WORLD_MARGIN_M };
     }
 
+    // The way back out. Roaming happens in metres, but where you have been is
+    // remembered in lat/lng like everything else, so it survives the world
+    // being rebuilt around a different walk with a different origin.
+    function fromM(x, y) {
+      return { lat: b.maxLat - (y - WORLD_MARGIN_M) / 111320,
+               lng: b.minLng + (x - WORLD_MARGIN_M) / mPerDegLng };
+    }
+
     // road segments in metres
     var segs = [], areas = [];
     (state.osmWays || []).forEach(function (w) {
@@ -1521,7 +1612,9 @@
         active.forEach(function (p) { skip[p.t + "|" + p.lat + "|" + p.lng] = 1; });
       }
       var visited = {};
-      state.points.forEach(function (pt) {
+      // Ground you covered yourself in roam mode counts the same as ground he
+      // covered on a real walk — you were both actually there.
+      state.points.concat(state.roamed || []).forEach(function (pt) {
         if (skip && skip[pt.t + "|" + pt.lat + "|" + pt.lng]) return;
         var m = toM(pt.lat, pt.lng);
         var cx = Math.floor(m.x / VIS), cy = Math.floor(m.y / VIS);
@@ -1973,9 +2066,19 @@
     var seen = new Uint8Array(cols * rows);
     computeSeen(seen);
 
+    // What you cannot walk through, for roaming on foot. Buildings and water
+    // only: hedges and garden walls are a tile thick and blocking them would
+    // turn every front garden into a maze, which is not what walking round
+    // your own streets feels like.
+    var solid = new Uint8Array(cols * rows);
+    for (var qi = 0; qi < cols * rows; qi++) {
+      solid[qi] = (kindMap[qi] === 4 || kindMap[qi] === 5) ? 1 : 0;
+    }
+
     world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen,
               trees: trees, props: props, shadow: shadow, vis: VIS,
-              toM: toM, widthM: widthM, heightM: heightM,
+              solid: solid, kind: kindMap,
+              toM: toM, fromM: fromM, widthM: widthM, heightM: heightM,
               recomputeSeen: function () { computeSeen(seen); } };
     window.__world = world;
     return world;
@@ -2048,6 +2151,28 @@
   }
   var pb = { walk: null, index: -1, playing: false, speed: 1, elapsed: 0, duration: 0 };
 
+  // ---------- roaming ----------
+  // Free roam: you walk, he follows. Everything below is in metres, the same
+  // units the routing and the fog already use, and only converted to pixels
+  // at the point of drawing.
+  var WALKER_FRAME = { her: 0, him: 4 };     // matches assets/city-index.json
+  var WALK_MS = 1.45;                        // an ordinary walking pace, m/s
+  var JOG_MS = 2.9;                          // holding shift
+  var BODY_R = 0.7;                          // how wide he is, for walls
+  var LEASH_M = 3.4;                         // how far back the dog trails
+  var DOG_SPEED = 4.2;                       // he can always catch up
+  var SNIFF_AFTER = 1.6;                     // seconds of standing still
+
+  var roam = {
+    on: false, who: "her",
+    x: 0, y: 0, hx: 1, hy: 0,                // position and facing
+    metres: 0, still: 0, lastReveal: null,
+    trail: [],                               // breadcrumbs, newest last
+    dog: { x: 0, y: 0, h: 0, wander: null, moving: false },
+    keys: {},                                // held keys, by direction
+    stick: null                              // touch joystick: {ox, oy, dx, dy}
+  };
+
   class BootScene extends Phaser.Scene {
     constructor() { super("boot"); }
 
@@ -2056,6 +2181,7 @@
       this.load.spritesheet("tiles", "assets/city.png", { frameWidth: TS, frameHeight: TS });
       this.load.spritesheet("props", "assets/props.png", { frameWidth: PS, frameHeight: PS });
       this.load.spritesheet("dog", "assets/dog-topdown.png", { frameWidth: 16, frameHeight: 16 });
+      this.load.spritesheet("people", "assets/people.png", { frameWidth: 16, frameHeight: 16 });
     }
 
     create() { this.scene.start("world"); }
@@ -2076,14 +2202,51 @@
         frames: this.anims.generateFrameNumbers("dog", { start: 0, end: 0 }),
         frameRate: 1, repeat: -1
       });
+      Object.keys(WALKER_FRAME).forEach(function (who) {
+        var f = WALKER_FRAME[who];
+        scene.anims.create({
+          key: "walk-" + who,
+          frames: scene.anims.generateFrameNumbers("people", { start: f, end: f + 3 }),
+          frameRate: 8, repeat: -1
+        });
+        scene.anims.create({
+          key: "stand-" + who,
+          frames: scene.anims.generateFrameNumbers("people", { start: f, end: f }),
+          frameRate: 1, repeat: -1
+        });
+      });
       sceneIsUp();          // releases any build queued before Phaser was ready
 
       this.input.addPointer(2);          // two-finger gestures
       this.pinchDist = null;
 
+      // While roaming, a drag is a thumbstick rather than a pan: it anchors
+      // where you put your thumb down and steers from there, which is the only
+      // way this is playable on a phone. Panning the camera away from yourself
+      // is not something you want mid-walk anyway.
+      this.input.on("pointerdown", function (p) {
+        if (!roam.on || (this.input.pointer2 && this.input.pointer2.isDown)) return;
+        roam.stick = { ox: p.x, oy: p.y, dx: 0, dy: 0 };
+        showStick(p.x, p.y);
+      }, this);
+      this.input.on("pointerup", function () {
+        if (roam.stick) { roam.stick = null; hideStick(); }
+      }, this);
+
       this.input.on("pointermove", function (p) {
         if (this.input.pointer2 && this.input.pointer2.isDown) return;  // pinching
         if (!p.isDown) return;
+        if (roam.on) {
+          if (!roam.stick) return;
+          var sx = p.x - roam.stick.ox, sy = p.y - roam.stick.oy;
+          var len = Math.hypot(sx, sy), MAXD = 54;
+          if (len < 6) { roam.stick.dx = roam.stick.dy = 0; moveStick(0, 0); return; }
+          var f = Math.min(1, len / MAXD);
+          roam.stick.dx = sx / len * f;
+          roam.stick.dy = sy / len * f;
+          moveStick(sx / len * Math.min(len, MAXD), sy / len * Math.min(len, MAXD));
+          return;
+        }
         var dx = p.x - p.prevPosition.x, dy = p.y - p.prevPosition.y;
         if (!dx && !dy) return;
         // Dragging during playback takes the camera off the dog rather than
@@ -2695,6 +2858,231 @@
       tile.tint = fog === 2 ? lit : mixHex(dark, lit, 0.5);
     }
 
+    // ---------- free roam ----------
+
+    // Is there something at these metres you cannot walk into? Buildings and
+    // water; see the mask built with the world.
+    solidAt(mx, my) {
+      var w = this.worldRef;
+      if (!w) return false;
+      if (mx < 0 || my < 0 || mx >= w.widthM || my >= w.heightM) return true;
+      var tx = Math.floor(mx / w.mpt), ty = Math.floor(my / w.mpt);
+      return !!w.solid[ty * w.cols + tx];
+    }
+
+    // The body has width, so a corner has to be tested at its corners rather
+    // than at its centre — otherwise you clip through the diagonal of a wall.
+    blocked(mx, my) {
+      return this.solidAt(mx - BODY_R, my - BODY_R) || this.solidAt(mx + BODY_R, my - BODY_R) ||
+             this.solidAt(mx - BODY_R, my + BODY_R) || this.solidAt(mx + BODY_R, my + BODY_R);
+    }
+
+    // Somewhere sensible to start from, spiralling out from his home fix.
+    //
+    // The pavement, by preference. His home fix usually lands inside the
+    // footprint of his own house, and simply taking the nearest tile that is
+    // not a wall drops you in the back garden, hemmed in on three sides —
+    // which is a poor start to a walk and not where you would put your shoes
+    // on. Any open ground will do if there is no pavement within reach.
+    nearestOpen(mx, my) {
+      var w = this.worldRef, step = w.mpt;
+      // Best first: pavement or footpath, then the carriageway, then any open
+      // ground at all. Without the ranking you can be set down in the middle of
+      // the road, which is not where anyone starts a walk.
+      var best = [null, null, null];
+      for (var ring = 0; ring < 60 && !best[0]; ring++) {
+        for (var a = 0; a < Math.max(1, ring * 8); a++) {
+          var th = a * Math.PI * 2 / Math.max(1, ring * 8);
+          var qx = mx + Math.cos(th) * ring * step, qy = my + Math.sin(th) * ring * step;
+          if (this.blocked(qx, qy)) continue;
+          var tx = Math.floor(qx / w.mpt), ty = Math.floor(qy / w.mpt);
+          if (tx < 0 || ty < 0 || tx >= w.cols || ty >= w.rows) continue;
+          var kind = w.kind[ty * w.cols + tx];
+          var tier = (kind === 2 || kind === 6) ? 0 : (kind === 1 ? 1 : 2);
+          if (!best[tier]) best[tier] = { x: qx, y: qy };
+          if (tier === 0) break;
+        }
+      }
+      return best[0] || best[1] || best[2] || { x: mx, y: my };
+    }
+
+    beginRoam(who) {
+      var w = this.worldRef;
+      if (!w) return false;
+      roam.who = who;
+      var start = state.points.length
+        ? w.toM(state.points[0].lat, state.points[0].lng)
+        : { x: w.widthM / 2, y: w.heightM / 2 };
+      var open = this.nearestOpen(start.x, start.y);
+      roam.x = open.x; roam.y = open.y;
+      roam.hx = 1; roam.hy = 0;
+      roam.metres = 0; roam.still = 0; roam.lastReveal = null;
+      roam.trail = [];
+      roam.dog.x = open.x - LEASH_M; roam.dog.y = open.y;
+      roam.dog.h = 0; roam.dog.wander = null;
+
+      if (!this.walker) {
+        this.walker = this.add.sprite(0, 0, "people").setOrigin(0.5, 0.5);
+      }
+      this.walker.setTexture("people").setVisible(true).setDepth(100001);
+      this.walker.play("stand-" + who);
+
+      var scale = this.worldScale;
+      this.walker.setPosition(roam.x * scale, roam.y * scale);
+      this.dog.setPosition(roam.dog.x * scale, roam.dog.y * scale).setVisible(true);
+      this.dog.play("sit");
+      if (this.liveGfx) this.liveGfx.clear();
+      if (this.dogGfx) this.dogGfx.clear();
+
+      // Close enough in to see the pavement you are standing on. About sixty
+      // metres across reads as a street rather than as a map.
+      var cam = this.cameras.main;
+      cam.stopFollow();
+      this.setZoom(Math.max(this.fitZoom, this.scale.width / (60 * scale)), false);
+      cam.startFollow(this.walker, true, 0.16, 0.16);
+      this.freeCam = false;
+      this.revealAt(roam.x, roam.y);
+      roam.on = true;
+      return true;
+    }
+
+    endRoam() {
+      roam.on = false;
+      if (this.walker) this.walker.setVisible(false);
+      var cam = this.cameras.main;
+      cam.stopFollow();
+      this.setZoom(this.fitZoom, true);
+      if (this.dog) this.dog.play("sit");
+    }
+
+    // One frame of roaming: read the controls, move, slide along whatever you
+    // walked into, bring the dog along, and light up the ground.
+    updateRoam(delta) {
+      var w = this.worldRef, scale = this.worldScale;
+      if (!w || !this.walker) return;
+      // A long frame is split into short steps rather than clamped, for two
+      // reasons: clamping quietly throws the time away, so on anything short of
+      // a smooth 60fps you walk in slow motion; and a single long step at jog
+      // speed can jump clean through a wall a metre thick.
+      var total = Math.min(0.25, delta / 1000);
+      var steps = Math.max(1, Math.ceil(total / 0.025));
+      var dt = total / steps;
+
+      var ix = (roam.keys.right ? 1 : 0) - (roam.keys.left ? 1 : 0);
+      var iy = (roam.keys.down ? 1 : 0) - (roam.keys.up ? 1 : 0);
+      if (roam.stick) { ix += roam.stick.dx; iy += roam.stick.dy; }
+      var mag = Math.hypot(ix, iy);
+      if (mag > 1) { ix /= mag; iy /= mag; mag = 1; }
+
+      var speed = (roam.keys.fast ? JOG_MS : WALK_MS) * mag;
+      var moved = 0;
+      if (speed > 0.01) {
+        for (var st = 0; st < steps; st++) {
+          var step = speed * dt, fromX = roam.x, fromY = roam.y;
+          // Axis at a time, so walking into a wall at an angle slides along it
+          // instead of stopping you dead.
+          var nx = roam.x + ix * step;
+          if (!this.blocked(nx, roam.y)) roam.x = nx;
+          var ny = roam.y + iy * step;
+          if (!this.blocked(roam.x, ny)) roam.y = ny;
+          // Straight-line distance, not the two axes added together: summing
+          // them counts a diagonal as forty per cent longer than it is.
+          moved += Math.hypot(roam.x - fromX, roam.y - fromY);
+        }
+        if (moved > 0) { roam.hx = ix; roam.hy = iy; }
+      }
+
+      if (moved > 0.001) {
+        roam.metres += moved;
+        roam.still = 0;
+        if (this.walker.anims.currentAnim.key !== "walk-" + roam.who) {
+          this.walker.play("walk-" + roam.who);
+        }
+        // Breadcrumbs. The dog walks where you walked, which is what keeps him
+        // out of the hedges and round the corners rather than cutting through.
+        var last = roam.trail[roam.trail.length - 1];
+        if (!last || Math.hypot(roam.x - last.x, roam.y - last.y) > 0.4) {
+          roam.trail.push({ x: roam.x, y: roam.y });
+          if (roam.trail.length > 400) roam.trail.shift();
+        }
+      } else {
+        roam.still += total;
+        if (this.walker.anims.currentAnim.key !== "stand-" + roam.who) {
+          this.walker.play("stand-" + roam.who);
+        }
+      }
+
+      this.walker.setPosition(roam.x * scale, roam.y * scale);
+      this.walker.setRotation(Math.atan2(roam.hy, roam.hx));
+
+      this.updateRoamDog(total, scale);
+
+      // Fog, every couple of metres rather than every frame. Where you have
+      // been is recorded in lat/lng so it outlives this world, and the whole
+      // seen map is not recomputed here — that rebuilds from the recorded
+      // points and would wipe the tiles just uncovered.
+      var lr = roam.lastReveal;
+      if (!lr || Math.hypot(roam.x - lr.x, roam.y - lr.y) > 2) {
+        roam.lastReveal = { x: roam.x, y: roam.y };
+        this.revealAt(roam.x, roam.y);
+        rememberRoamed(w.fromM(roam.x, roam.y));
+        updateStats();
+      }
+      updateRoamBar();
+    }
+
+    // He trails a few metres behind on the ground you have already covered, and
+    // when you stop he does what a dog does: pootles about and has a sniff.
+    updateRoamDog(dt, scale) {
+      var d = roam.dog, tgt = null;
+
+      if (roam.still > SNIFF_AFTER) {
+        // Standing about. Pick somewhere nearby to nose at, and change his mind
+        // every few seconds.
+        if (!d.wander || d.wanderFor <= 0) {
+          var th = Math.random() * Math.PI * 2, rr = 1.5 + Math.random() * 2.5;
+          var wx = roam.x + Math.cos(th) * rr, wy = roam.y + Math.sin(th) * rr;
+          d.wander = this.blocked(wx, wy) ? { x: roam.x, y: roam.y } : { x: wx, y: wy };
+          d.wanderFor = 1.5 + Math.random() * 2.5;
+        }
+        d.wanderFor -= dt;
+        tgt = d.wander;
+      } else {
+        d.wander = null;
+        // Walk back along the breadcrumbs until the leash length is used up.
+        var acc = 0, i = roam.trail.length - 1;
+        tgt = { x: roam.x, y: roam.y };
+        var prev = tgt;
+        while (i >= 0) {
+          var p = roam.trail[i];
+          var seg = Math.hypot(p.x - prev.x, p.y - prev.y);
+          if (acc + seg >= LEASH_M) {
+            var f = (LEASH_M - acc) / (seg || 1);
+            tgt = { x: prev.x + (p.x - prev.x) * f, y: prev.y + (p.y - prev.y) * f };
+            break;
+          }
+          acc += seg; prev = p; tgt = p; i--;
+        }
+      }
+
+      var dx = tgt.x - d.x, dy = tgt.y - d.y, dist = Math.hypot(dx, dy);
+      // A dead zone, or he jitters on the spot trying to sit exactly on target.
+      if (dist > 0.25) {
+        // He hurries when he has dropped a long way behind and ambles when he
+        // is already close, which is what stops the following looking robotic.
+        var v = Math.min(DOG_SPEED, Math.max(0.6, dist * 1.9));
+        var step = Math.min(dist, v * dt);
+        var nx = d.x + dx / dist * step, ny = d.y + dy / dist * step;
+        if (!this.solidAt(nx, ny)) { d.x = nx; d.y = ny; }
+        d.h = Math.atan2(dy, dx);
+        if (!d.moving) { d.moving = true; this.dog.play("trot"); }
+      } else if (d.moving) {
+        d.moving = false;
+        this.dog.play("sit");
+      }
+      this.dog.setPosition(d.x * scale, d.y * scale).setRotation(d.h);
+    }
+
     // Uncover the ground around a point the dog has just reached. Only the
     // tiles whose fog level actually changed are re-tinted, so this stays
     // cheap enough to run while the walk plays.
@@ -2809,6 +3197,7 @@
     update(time, delta) {
       this.fitOverlays(delta);
       this.handlePinch();
+      if (roam.on) { this.updateRoam(delta); return; }
       if (!pb.playing || !pb.walk) return;
       pb.elapsed += delta * pb.speed;
       var progress = Math.min(pb.elapsed / pb.duration, 1);
@@ -3076,6 +3465,7 @@
   }
 
   function startWalk(i) {
+    if (roam.on) stopRoam();          // you cannot be out walking him and watching him at once
     var walk = state.walks[i];
     if (!walk || walk.length < 2) return;
     pb.playing = false; pb.walk = null; pb.elapsed = 0;
@@ -3478,12 +3868,47 @@
       active.forEach(function (p) { skip[p.t + "|" + p.lat + "|" + p.lng] = 1; });
     }
     state.grid.forEach(function (row) { row.forEach(function (c) { c.explored = false; }); });
-    state.points.forEach(function (p) {
+    state.points.concat(state.roamed).forEach(function (p) {
       if (skip && skip[p.t + "|" + p.lat + "|" + p.lng]) return;
       var cell = pointToCell(p, state.territory);
       state.grid[cell.row][cell.col].explored = true;
     });
     updateStats();
+  }
+
+  // Ground you covered on your own two feet. Kept in lat/lng, deduped onto a
+  // ~15m grid so a long roam is a few hundred entries rather than a few
+  // hundred thousand, and written back to localStorage when you stop — an
+  // afternoon of exploring should still be there tomorrow.
+  var ROAM_KEY = "dogwalk.roamed.v1";
+  var roamSeen = {};
+
+  function rememberRoamed(ll) {
+    var k = ll.lat.toFixed(4) + "," + ll.lng.toFixed(4);
+    if (roamSeen[k]) return;
+    roamSeen[k] = 1;
+    state.roamed.push({ lat: ll.lat, lng: ll.lng, t: "" });
+    if (state.roamed.length > 6000) state.roamed.shift();
+    markExplored(ll);
+  }
+
+  function saveRoamed() {
+    try {
+      localStorage.setItem(ROAM_KEY, JSON.stringify(state.roamed.map(function (p) {
+        return [+p.lat.toFixed(5), +p.lng.toFixed(5)];
+      })));
+    } catch (e) { /* a full quota costs you the history, not the walk */ }
+  }
+
+  function loadRoamed() {
+    try {
+      var raw = JSON.parse(localStorage.getItem(ROAM_KEY) || "[]");
+      if (!Array.isArray(raw)) return;
+      state.roamed = raw.map(function (p) { return { lat: p[0], lng: p[1], t: "" }; });
+      state.roamed.forEach(function (p) {
+        roamSeen[p.lat.toFixed(4) + "," + p.lng.toFixed(4)] = 1;
+      });
+    } catch (e) { state.roamed = []; }
   }
 
   function markExplored(pt) {
@@ -3556,9 +3981,145 @@
 
   // Keyboard: space to play or pause, arrows to scrub or change speed, +/- to
   // zoom, Escape to stop. Ignored while you are typing in a field.
+  // ---------- roam UI ----------
+  var stickEl = document.getElementById("stick");
+  function showStick(x, y) {
+    stickEl.style.left = x + "px"; stickEl.style.top = y + "px";
+    stickEl.classList.add("on");
+    moveStick(0, 0);
+  }
+  function moveStick(dx, dy) {
+    stickEl.firstElementChild.style.transform = "translate(" + dx + "px," + dy + "px)";
+  }
+  function hideStick() { stickEl.classList.remove("on"); }
+
+  // What you are standing next to, off the same OSM names the map is lettered
+  // with. A named shop or park wins over the street, because "outside the
+  // library" tells you where you are and "Fenwick Road" is 900m long.
+  function whereAmI() {
+    var w = window.__world;
+    if (!w || !w.labels) return "";
+    var bestPlace = null, bestPd = 32, bestSt = null, bestSd = 45;
+    for (var i = 0; i < w.labels.length; i++) {
+      var l = w.labels[i];
+      var d = Math.hypot(l.x - roam.x, l.y - roam.y);
+      if (l.kind === "street") {
+        if (d < bestSd) { bestSd = d; bestSt = l.name; }
+      } else if (d < bestPd) { bestPd = d; bestPlace = l.name; }
+    }
+    if (bestPlace) return "outside " + bestPlace;
+    if (bestSt) return "on " + bestSt;
+    return "off the beaten track";
+  }
+
+  function updateRoamBar() {
+    if (!roam.on) return;
+    var m = roam.metres;
+    document.getElementById("roam-dist").textContent =
+      m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(2) + " km";
+    document.getElementById("roam-where").textContent = whereAmI();
+  }
+
+  // Character previews, drawn straight from the loaded spritesheet so the
+  // buttons cannot drift out of step with the art.
+  function drawWhoPreviews() {
+    if (!scene || !scene.textures.exists("people")) return;
+    var src = scene.textures.get("people").getSourceImage();
+    document.querySelectorAll("#roam-who .who").forEach(function (b) {
+      var f = WALKER_FRAME[b.getAttribute("data-who")];
+      var ctx = b.querySelector("canvas").getContext("2d");
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, 48, 48);
+      // Drawn rotated a quarter turn so they face down the screen, the way you
+      // meet somebody, rather than east the way the sheet stores them.
+      ctx.save();
+      ctx.translate(24, 24); ctx.rotate(Math.PI / 2); ctx.scale(3, 3);
+      ctx.drawImage(src, f * 16, 0, 16, 16, -8, -8, 16, 16);
+      ctx.restore();
+    });
+  }
+
+  function startRoam() {
+    if (!scene || !scene.worldRef) { toast("The map is still loading"); return; }
+    if (pb.walk) stopWalk();
+    document.getElementById("roam-panel").classList.remove("open");
+    var who = document.querySelector("#roam-who .who.on").getAttribute("data-who");
+    if (!scene.beginRoam(who)) { toast("No map to walk around yet"); return; }
+    document.getElementById("roam-bar").classList.remove("off");
+    document.getElementById("btn-roam").classList.add("on");
+    // The light follows your own clock, since this walk is happening now.
+    scene.setTimeOfDay(new Date().toISOString());
+    scene.setWeather(0, undefined, 0, 0);
+    updateRoamBar();
+  }
+
+  function stopRoam() {
+    if (!roam.on) return;
+    roam.keys = {}; roam.stick = null; hideStick();
+    saveRoamed();
+    scene.endRoam();
+    document.getElementById("roam-bar").classList.add("off");
+    document.getElementById("btn-roam").classList.remove("on");
+    scene.setTimeOfDay(state.points.length ? state.points[0].t : null);
+    if (roam.metres > 20) {
+      toast("You walked " + (roam.metres < 1000
+        ? Math.round(roam.metres) + "m"
+        : (roam.metres / 1000).toFixed(2) + "km") + " with " + (state.dogName || "him"));
+    }
+  }
+
+  document.getElementById("btn-roam").addEventListener("click", function () {
+    if (roam.on) { stopRoam(); return; }
+    drawWhoPreviews();
+    document.getElementById("roam-blurb").textContent =
+      "Walk the real streets " + (state.dogName || "he") + " knows and he will follow you. " +
+      "Pick who is holding the lead.";
+    document.getElementById("roam-head").textContent =
+      state.dogName ? "Take " + state.dogName + " out yourself" : "Take him out yourself";
+    document.getElementById("roam-panel").classList.add("open");
+  });
+  document.getElementById("btn-roam-go").addEventListener("click", startRoam);
+  document.getElementById("btn-roam-cancel").addEventListener("click", function () {
+    document.getElementById("roam-panel").classList.remove("open");
+  });
+  document.getElementById("btn-roam-stop").addEventListener("click", stopRoam);
+  document.querySelectorAll("#roam-who .who").forEach(function (b) {
+    b.addEventListener("click", function () {
+      document.querySelectorAll("#roam-who .who").forEach(function (o) { o.classList.remove("on"); });
+      b.classList.add("on");
+    });
+  });
+
+  // Roaming takes the arrow keys over from scrubbing, since while you are the
+  // one walking they can only sensibly mean one thing.
+  var ROAM_KEYS = {
+    ArrowLeft: "left", a: "left", A: "left",
+    ArrowRight: "right", d: "right", D: "right",
+    ArrowUp: "up", w: "up", W: "up",
+    ArrowDown: "down", s: "down", S: "down"
+  };
+
+  function roamKey(e, down) {
+    if (!roam.on) return false;
+    var dir = ROAM_KEYS[e.key];
+    if (e.key === "Shift") { roam.keys.fast = down; return true; }
+    if (!dir) return false;
+    e.preventDefault();
+    roam.keys[dir] = down;
+    return true;
+  }
+
+  document.addEventListener("keyup", function (e) {
+    var t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    roamKey(e, false);
+  });
+
   document.addEventListener("keydown", function (e) {
     var t = e.target;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    if (roamKey(e, true)) return;
+    if (roam.on && e.key === "Escape") { stopRoam(); return; }
     var k = e.key;
     if (k === " " || k === "k") {
       if (!pb.walk) return;
@@ -3703,7 +4264,9 @@
     scene: [BootScene, WorldScene]
   });
   window.game = game;   // debug handle
-  window.dogwalk = { state: state, weatherAt: weatherAt };   // for tests
+  window.dogwalk = { state: state, weatherAt: weatherAt, roam: roam };   // for tests
+
+  loadRoamed();
 
   if (window.matchMedia("(max-width: 720px)").matches) {
     document.getElementById("walks").classList.add("hidden");
