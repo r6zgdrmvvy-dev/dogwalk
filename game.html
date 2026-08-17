@@ -162,6 +162,62 @@
   }
   #toast.show { opacity: 1; }
 
+  /* ---------- stats ---------- */
+  /* One hue for every chart: magnitude is carried by bar length, so a second
+     colour would encode nothing. Amber is the HUD's own accent and clears 3:1
+     against this surface. */
+  #stats-panel {
+    --surface: #1c1713;
+    --series: #e8a33d;
+    --grid: #3a2f26;
+    --ink-2: rgba(244, 234, 214, 0.72);
+    --ink-3: rgba(244, 234, 214, 0.45);
+    position: fixed; z-index: 45; inset: 0; display: none;
+    background: rgba(8, 6, 4, 0.78); padding: 20px; overflow: auto;
+  }
+  #stats-panel.open { display: block; }
+  #stats-panel .card {
+    background: var(--surface); border: 2px solid var(--panel-edge); border-radius: 14px;
+    padding: 18px; width: min(760px, 100%); margin: 0 auto;
+  }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .sheet-head h2 { margin: 0; font-size: 20px; }
+
+  .hero { margin: 14px 0 2px; }
+  .hero b { font-size: 52px; line-height: 1; color: var(--accent); font-weight: 700; }
+  .hero span { font-size: 14px; color: var(--ink-2); margin-left: 6px; }
+  .hero .note { display: block; font-size: 13px; color: var(--ink-3); margin-top: 4px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; margin: 14px 0 4px; }
+  .kpi { background: #16120f; border: 1px solid var(--grid); border-radius: 10px; padding: 9px 10px; }
+  .kpi b { display: block; font-size: 19px; font-variant-numeric: tabular-nums; }
+  .kpi span { display: block; font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.6px; margin-top: 2px; }
+
+  .chart { margin-top: 20px; }
+  .chart h3 { margin: 0 0 1px; font-size: 14px; font-weight: 600; }
+  .chart .sub { margin: 0 0 8px; font-size: 12px; color: var(--ink-3); }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart text { fill: var(--ink-3); font-size: 9px; font-family: inherit; }
+  .chart .val { fill: var(--ink-2); font-size: 9px; font-weight: 600; }
+  .chart .grid { stroke: var(--grid); stroke-width: 1; }
+  .chart .bar { fill: var(--series); }
+  .chart rect.hit { fill: transparent; cursor: default; }
+
+  #stats-tip {
+    position: fixed; z-index: 60; pointer-events: none; opacity: 0;
+    background: #0d0b09; border: 1px solid var(--panel-edge); border-radius: 7px;
+    padding: 5px 8px; font-size: 12px; white-space: nowrap; transition: opacity 0.1s;
+  }
+  #stats-tip.on { opacity: 1; }
+
+  .tbl-toggle { margin-top: 18px; }
+  #stats-table { margin-top: 10px; display: none; }
+  #stats-table.on { display: block; }
+  #stats-table table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  #stats-table th, #stats-table td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--grid); }
+  #stats-table th { color: var(--ink-3); font-weight: 600; }
+  #stats-table td { font-variant-numeric: tabular-nums; }
+
   #data-panel {
     position: fixed; z-index: 40; inset: 0; display: none;
     background: rgba(8,6,4,0.72); align-items: center; justify-content: center; padding: 20px;
@@ -226,6 +282,7 @@
   </div>
   <div style="display:flex;gap:8px;align-items:flex-start;">
     <button class="btn" id="btn-walks">Walks</button>
+    <button class="btn" id="btn-stats">Stats</button>
     <button class="btn" id="btn-data">Load data</button>
     <div id="zoom">
       <button class="btn" id="btn-zoom-in" aria-label="Zoom in">+</button>
@@ -255,6 +312,17 @@
 </div>
 
 <div id="toast"></div>
+<div id="stats-tip"></div>
+
+<div id="stats-panel">
+  <div class="card">
+    <div class="sheet-head">
+      <h2 id="stats-title">Stats</h2>
+      <button class="btn" id="btn-stats-close">Close</button>
+    </div>
+    <div id="stats-body"></div>
+  </div>
+</div>
 
 <div id="data-panel">
   <div class="card">
@@ -2577,6 +2645,229 @@
     if (input && input.value !== state.dogName) input.value = state.dogName;
   }
 
+  // ============================================================
+  //  Stats
+  // ============================================================
+
+  function fmtDur(sec) {
+    var h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+    if (h && m) return h + "h " + m + "m";
+    if (h) return h + "h";
+    return m + "m";
+  }
+
+  function walkStats() {
+    var rows = state.walks.map(function (w, i) {
+      var t0 = new Date(w[0].t), t1 = new Date(w[w.length - 1].t);
+      var routed = routedIfKnown(i);
+      return {
+        i: i, start: t0, end: t1,
+        secs: (t1 - t0) / 1000,
+        km: walkKm(routed || w),
+        routed: !!routed
+      };
+    }).filter(function (r) { return r.secs > 0; });
+    rows.sort(function (a, b) { return a.start - b.start; });
+    return rows;
+  }
+
+  // A column chart. One hue, because bar length already carries the magnitude;
+  // a second colour would encode nothing. Bars are capped at 24px and separated
+  // by a 2px gap in the surface colour rather than a stroke.
+  function barChart(rows, opts) {
+    opts = opts || {};
+    var W = 720, H = opts.height || 132, padL = 30, padB = 20, padT = 12;
+    var plotW = W - padL, plotH = H - padB - padT;
+    var max = 0;
+    rows.forEach(function (r) { if (r.v > max) max = r.v; });
+    if (max <= 0) max = 1;
+
+    var band = plotW / Math.max(1, rows.length);
+    var bw = Math.min(24, Math.max(2, band - 2));      // 2px surface gap
+    var ticks = [0, max / 2, max];
+    var svg = ['<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+               (opts.label || "chart") + '">'];
+
+    ticks.forEach(function (t) {
+      var y = padT + plotH - (t / max) * plotH;
+      svg.push('<line class="grid" x1="' + padL + '" y1="' + y.toFixed(1) +
+               '" x2="' + W + '" y2="' + y.toFixed(1) + '"/>');
+      svg.push('<text x="' + (padL - 6) + '" y="' + (y + 3).toFixed(1) +
+               '" text-anchor="end">' + opts.tick(t) + '</text>');
+    });
+
+    var peak = rows.indexOf(rows.filter(function (r) { return r.v === max; })[0]);
+    rows.forEach(function (r, k) {
+      var x = padL + band * k + (band - bw) / 2;
+      var h = (r.v / max) * plotH;
+      var y = padT + plotH - h;
+      if (r.v > 0) {
+        // 4px rounded data-end, square at the baseline
+        var rr = Math.min(4, bw / 2, h);
+        svg.push('<path class="bar" d="M' + x.toFixed(1) + ' ' + (y + h).toFixed(1) +
+                 ' L' + x.toFixed(1) + ' ' + (y + rr).toFixed(1) +
+                 ' Q' + x.toFixed(1) + ' ' + y.toFixed(1) + ' ' + (x + rr).toFixed(1) + ' ' + y.toFixed(1) +
+                 ' L' + (x + bw - rr).toFixed(1) + ' ' + y.toFixed(1) +
+                 ' Q' + (x + bw).toFixed(1) + ' ' + y.toFixed(1) + ' ' + (x + bw).toFixed(1) + ' ' + (y + rr).toFixed(1) +
+                 ' L' + (x + bw).toFixed(1) + ' ' + (y + h).toFixed(1) + ' Z"/>');
+      }
+      // Only the peak is labelled: a number on every bar goes unread.
+      if (k === peak && r.v > 0) {
+        svg.push('<text class="val" x="' + (x + bw / 2).toFixed(1) + '" y="' +
+                 (y - 4).toFixed(1) + '" text-anchor="middle">' + opts.tick(r.v) + '</text>');
+      }
+      if (r.tick) {
+        svg.push('<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 6) +
+                 '" text-anchor="middle">' + r.tick + '</text>');
+      }
+      svg.push('<rect class="hit" x="' + (padL + band * k).toFixed(1) + '" y="' + padT +
+               '" width="' + band.toFixed(1) + '" height="' + plotH +
+               '" data-tip="' + esc(r.label) + '"/>');
+    });
+    svg.push("</svg>");
+    return svg.join("");
+  }
+
+  function esc(t) {
+    return String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  }
+
+  function renderStats() {
+    var rows = walkStats();
+    var body = document.getElementById("stats-body");
+    document.getElementById("stats-title").textContent =
+      state.dogName ? state.dogName + "'s stats" : "Stats";
+    if (!rows.length) { body.innerHTML = "<p>No walks loaded.</p>"; return; }
+
+    var totalKm = rows.reduce(function (a, r) { return a + r.km; }, 0);
+    var totalSecs = rows.reduce(function (a, r) { return a + r.secs; }, 0);
+    var longest = rows.slice().sort(function (a, b) { return b.km - a.km; })[0];
+    var first = rows[0].start, last = rows[rows.length - 1].start;
+    var days = Math.max(1, Math.round((last - first) / 86400000) + 1);
+    var anyRouted = rows.some(function (r) { return r.routed; });
+
+    // distance per day across the whole span, zeros included — the gaps are
+    // part of the picture
+    var byDay = {}, dayKeys = [];
+    for (var d = 0; d < days; d++) {
+      var dt = new Date(first.getTime() + d * 86400000);
+      var key = dt.toISOString().slice(0, 10);
+      byDay[key] = 0; dayKeys.push(key);
+    }
+    rows.forEach(function (r) {
+      var key = r.start.toISOString().slice(0, 10);
+      if (byDay[key] === undefined) { byDay[key] = 0; dayKeys.push(key); }
+      byDay[key] += r.km;
+    });
+    dayKeys.sort();
+
+    var dayRows = dayKeys.map(function (k, idx) {
+      var dt = new Date(k + "T12:00:00Z");
+      return {
+        v: byDay[k],
+        tick: (idx === 0 || dt.getUTCDate() === 1 || idx === dayKeys.length - 1 ||
+               dt.getUTCDate() % 7 === 0) ? String(dt.getUTCDate()) : "",
+        label: dt.toLocaleDateString(undefined, { day: "numeric", month: "short" }) +
+               " · " + byDay[k].toFixed(1) + " km"
+      };
+    });
+
+    var HOURS = [];
+    for (var h = 0; h < 24; h++) HOURS.push({ v: 0, n: 0 });
+    rows.forEach(function (r) { var x = HOURS[r.start.getHours()]; x.v += 1; x.n += r.km; });
+    var hourRows = HOURS.map(function (x, h) {
+      return { v: x.v, tick: h % 3 === 0 ? String(h) : "",
+               label: h + ":00 · " + x.v + (x.v === 1 ? " walk" : " walks") };
+    });
+
+    var DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    var dow = DOW.map(function (n) { return { name: n, km: 0, n: 0 }; });
+    rows.forEach(function (r) {
+      var i = (r.start.getDay() + 6) % 7;      // Monday first
+      dow[i].km += r.km; dow[i].n += 1;
+    });
+    var dowRows = dow.map(function (x) {
+      return { v: x.km, tick: x.name,
+               label: x.name + " · " + x.km.toFixed(1) + " km over " + x.n +
+                      (x.n === 1 ? " walk" : " walks") };
+    });
+
+    var km1 = function (v) { return v.toFixed(v < 10 ? 1 : 0); };
+    var int0 = function (v) { return String(Math.round(v)); };
+
+    body.innerHTML =
+      '<div class="hero"><b>' + totalKm.toFixed(1) + '</b><span>km walked</span>' +
+      '<span class="note">' + rows.length + ' walks over ' + days + ' days, ' +
+      first.toLocaleDateString(undefined, { day: "numeric", month: "long" }) + ' to ' +
+      last.toLocaleDateString(undefined, { day: "numeric", month: "long" }) +
+      (anyRouted ? '' : ' · straight-line distances until each walk is routed') + '</span></div>' +
+
+      '<div class="kpis">' +
+      kpi(fmtDur(totalSecs), "on his paws") +
+      kpi((totalKm / rows.length).toFixed(2) + " km", "average walk") +
+      kpi(fmtDur(totalSecs / rows.length), "average time") +
+      kpi(longest.km.toFixed(1) + " km", "longest walk") +
+      kpi((totalKm / days).toFixed(2) + " km", "per day") +
+      kpi(((totalKm * 1000) / (totalSecs / 3600) / 1000).toFixed(1) + " km/h", "average pace") +
+      '</div>' +
+
+      '<div class="chart"><h3>Distance each day</h3>' +
+      '<p class="sub">Kilometres per day. Empty days are days he did not get out.</p>' +
+      barChart(dayRows, { tick: km1, label: "Distance per day", height: 140 }) + '</div>' +
+
+      '<div class="chart"><h3>When he gets walked</h3>' +
+      '<p class="sub">Number of walks starting in each hour.</p>' +
+      barChart(hourRows, { tick: int0, label: "Walks by hour of day", height: 110 }) + '</div>' +
+
+      '<div class="chart"><h3>Which days are busiest</h3>' +
+      '<p class="sub">Total kilometres by day of the week.</p>' +
+      barChart(dowRows, { tick: km1, label: "Distance by weekday", height: 110 }) + '</div>' +
+
+      '<div class="tbl-toggle"><button class="btn" id="btn-table">Show the numbers</button></div>' +
+      '<div id="stats-table">' + statsTable(rows) + '</div>';
+
+    document.getElementById("btn-table").addEventListener("click", function () {
+      var t = document.getElementById("stats-table");
+      t.classList.toggle("on");
+      this.textContent = t.classList.contains("on") ? "Hide the numbers" : "Show the numbers";
+    });
+    wireTips(body);
+  }
+
+  function kpi(value, label) {
+    return '<div class="kpi"><b>' + esc(value) + '</b><span>' + esc(label) + '</span></div>';
+  }
+
+  // Every figure in the charts is also here, so nothing is gated behind colour
+  // or a hover.
+  function statsTable(rows) {
+    var out = ['<table><thead><tr><th>Date</th><th>Start</th><th>Distance</th><th>Time</th></tr></thead><tbody>'];
+    rows.slice().reverse().forEach(function (r) {
+      out.push('<tr><td>' + r.start.toLocaleDateString(undefined, { day: "numeric", month: "short" }) +
+               '</td><td>' + r.start.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }) +
+               '</td><td>' + r.km.toFixed(2) + ' km</td><td>' + fmtDur(r.secs) + '</td></tr>');
+    });
+    out.push('</tbody></table>');
+    return out.join("");
+  }
+
+  // Hover readout for every bar. The hit area is the full band, not the bar, so
+  // short bars are still easy to hit.
+  function wireTips(root) {
+    var tip = document.getElementById("stats-tip");
+    root.querySelectorAll("rect.hit").forEach(function (el) {
+      el.addEventListener("pointerenter", function (e) {
+        tip.textContent = el.getAttribute("data-tip");
+        tip.classList.add("on");
+      });
+      el.addEventListener("pointermove", function (e) {
+        tip.style.left = Math.min(window.innerWidth - tip.offsetWidth - 8, e.clientX + 12) + "px";
+        tip.style.top = Math.max(8, e.clientY - 34) + "px";
+      });
+      el.addEventListener("pointerleave", function () { tip.classList.remove("on"); });
+    });
+  }
+
   function showLoader(msg) {
     document.getElementById("loader-msg").firstChild.nodeValue = msg;
     document.getElementById("loader").classList.add("on");
@@ -2701,6 +2992,8 @@
     } else if (k === "-" || k === "_") {
       if (scene) scene.nudgeZoom(1 / 1.5);
     } else if (k === "Escape") {
+      var stats = document.getElementById("stats-panel");
+      if (stats.classList.contains("open")) { stats.classList.remove("open"); return; }
       if (pb.walk) stopWalk();
       document.getElementById("data-panel").classList.remove("open");
     }
@@ -2709,6 +3002,14 @@
   document.getElementById("dog-name").addEventListener("input", function (e) {
     applyDogName(e.target.value);
     if (loadLocal()) saveLocal();          // only if there is already data to attach it to
+  });
+
+  document.getElementById("btn-stats").addEventListener("click", function () {
+    renderStats();
+    document.getElementById("stats-panel").classList.add("open");
+  });
+  document.getElementById("btn-stats-close").addEventListener("click", function () {
+    document.getElementById("stats-panel").classList.remove("open");
   });
 
   document.getElementById("btn-follow").addEventListener("click", function () {

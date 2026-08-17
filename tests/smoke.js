@@ -157,6 +157,41 @@ async function waitForReady(page) {
     check("re-centre picks the dog back up", await page.evaluate(
       () => !!window.game.scene.getScene("world").cameras.main._follow));
 
+    // stats panel: charts drawn, hue applied, hover readout, table view present
+    await page.keyboard.press("Escape");
+    await page.click("#btn-stats");
+    await page.waitForTimeout(700);
+    const stats = await page.evaluate(() => ({
+      open: getComputedStyle(document.getElementById("stats-panel")).display !== "none",
+      charts: document.querySelectorAll("#stats-body .chart").length,
+      bars: document.querySelectorAll("#stats-body .bar").length,
+      fill: document.querySelector("#stats-body .bar")
+        ? getComputedStyle(document.querySelector("#stats-body .bar")).fill : "",
+      kpis: document.querySelectorAll("#stats-body .kpi").length,
+      hero: (document.querySelector("#stats-body .hero b") || {}).textContent,
+    }));
+    check("stats panel opens", stats.open);
+    check("three charts drawn", stats.charts === 3, stats.charts);
+    check("bars are drawn and coloured", stats.bars > 0 && stats.fill !== "rgb(0, 0, 0)",
+          stats.bars + " bars, fill " + stats.fill);
+    check("kpi tiles present", stats.kpis >= 5, stats.kpis);
+    check("hero figure is a number", /^[\d.]+$/.test(stats.hero || ""), stats.hero);
+    const hit = await page.$$("#stats-body rect.hit");
+    if (hit.length) {
+      await hit[Math.floor(hit.length / 2)].hover();
+      await page.waitForTimeout(300);
+    }
+    check("hover readout appears", await page.evaluate(
+      () => getComputedStyle(document.getElementById("stats-tip")).opacity === "1"));
+    await page.click("#btn-table");
+    await page.waitForTimeout(300);
+    check("table view lists every walk", await page.evaluate(
+      () => document.querySelectorAll("#stats-table tbody tr").length) === 2);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(300);
+    check("escape closes stats", await page.evaluate(
+      () => getComputedStyle(document.getElementById("stats-panel")).display === "none"));
+
     check("no page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
     await page.close();
 
@@ -200,6 +235,12 @@ async function waitForReady(page) {
     await m.waitForTimeout(300);
     check("transport closes again", await m.evaluate(
       () => document.getElementById("transport").classList.contains("off")));
+    await m.tap("#btn-stats");
+    await m.waitForTimeout(700);
+    check("stats fit the phone", await m.evaluate(() => {
+      const c = document.querySelector("#stats-panel .card");
+      return c.scrollWidth <= window.innerWidth + 1;
+    }));
     check("no page errors", mErrors.length === 0, mErrors.slice(0, 2).join(" | "));
   } finally {
     await browser.close();

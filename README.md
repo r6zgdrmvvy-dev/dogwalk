@@ -117,6 +117,24 @@ are watching starts dark and lifts as he actually reaches it, so "explored"
 moves while you watch; everything covered on the other walks stays lit, because
 he really has been there.
 
+### Stats
+
+The "Stats" button opens a read-out of everything loaded: total distance as a
+hero figure, a row of tiles (time on his paws, average and longest walk, per-day
+average, pace), and three charts — distance per day across the whole span with
+the empty days left in, walks by hour of day, and distance by weekday.
+
+They are single-series column charts, because bar length already carries the
+magnitude and a second colour would encode nothing; the one hue is the HUD's own
+amber, which clears 3:1 against the panel. Bars cap at 24px with a 2px gap in
+the surface colour rather than a stroke, gridlines are hairline and recessive,
+and only the peak of each chart is labelled — a number on every bar goes unread.
+Every bar has a hover read-out, and "Show the numbers" gives the same data as a
+table so nothing is gated behind colour or a pointer.
+
+On the bundled month that says: 62 walks, 123 km, 44 hours on his paws, 7am is
+far and away his walk time, and Saturday is the biggest day.
+
 ### Weather
 
 The rain used to be a coin flip off the walk's date, which sits badly in a
