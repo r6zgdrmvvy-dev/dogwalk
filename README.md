@@ -52,13 +52,26 @@ A collar reports every couple of minutes, so consecutive fixes sit a hundred
 metres apart and the straight line between them cuts through gardens, houses
 and whole blocks. The dog did not walk through those.
 
-So the walkable ways — footpaths, residential streets, everything short of a
-motorway — are built into a graph, long runs split every ~14m so a fix can snap
-close to the line, and each consecutive pair of fixes is routed along it with
-Dijkstra. Footpaths are weighted cheaper than an A-road, so a route through a
-park beats the same distance along a main road. A fix more than 45m from any
-way is left where the GPS put it (the dog is genuinely off-network), and a
-route more than three times the straight-line distance is rejected as wrong.
+So the walkable ways — footpaths, back lanes, residential streets, everything
+short of a motorway — are built into a graph, long runs split every ~14m so a
+fix can snap close to the line, and the trace is routed along it with Dijkstra.
+Footpaths are weighted cheaper than an A-road, so a route through a park beats
+the same distance along a main road. A route more than three times the
+straight-line distance is rejected as wrong rather than drawn.
+
+Routing runs anchor to anchor, not fix to fix. A collar in a built-up area
+throws the odd fix a long way off — 15 of the 74 in the bundled walks are more
+than 45m from any way, one of them 166m — and treating each of those as a
+failure gave up on the two segments either side of it. Skipping the bad fix and
+routing across it puts the line close to where it should have been anyway.
+
+Which highway types get requested matters more than it looks: this corner of
+Glasgow has as many `service` ways as residential streets, plus footways,
+steps and cycleways. An earlier version routed over those types but never
+asked Overpass for them, so every back lane the dog cut down stranded a fix.
+Motorways are fetched so they get drawn, but are absent from the walkable set,
+so no route ever uses one.
+
 Each original fix keeps its timestamp; the time between two fixes is spread
 along the routed length.
 

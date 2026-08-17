@@ -519,13 +519,18 @@
   var WORLD_MARGIN_M = 140;      // ground drawn beyond the walked area
 
   function areaQuery(b) {
+    // Every highway type the router can walk on, plus motorways, which get
+    // drawn but are deliberately missing from WALKABLE so no route uses one.
+    // Service roads and footpaths matter more than they look: in this corner of
+    // Glasgow there are as many service ways as residential streets, and
+    // leaving them out stranded a fix every time the dog cut down a back lane.
     // pad the request, otherwise the map ends exactly where the dog turned
     var dLat = WORLD_MARGIN_M / 111320;
     var dLng = WORLD_MARGIN_M / (111320 * Math.cos(b.minLat * Math.PI / 180));
     var bbox = (b.minLat - dLat) + "," + (b.minLng - dLng) + "," +
                (b.maxLat + dLat) + "," + (b.maxLng + dLng);
     return "[out:json][timeout:20];(" +
-      'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|footway|path)$"](' + bbox + ');' +
+      'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service|pedestrian|footway|path|cycleway|steps|track|bridleway)$"](' + bbox + ');' +
       'way["natural"="water"](' + bbox + ');' +
       'way["landuse"~"^(forest|grass|meadow|recreation_ground|residential)$"](' + bbox + ');' +
       'way["natural"="wood"](' + bbox + ');' +
@@ -677,17 +682,23 @@
   // absent; everything else in a town has a pavement.
   var WALKABLE = {
     footway: 0.85, path: 0.85, pedestrian: 0.85, steps: 1.2, cycleway: 0.95,
+    track: 0.95, bridleway: 0.95,
     living_street: 1, residential: 1, unclassified: 1, service: 1,
     tertiary: 1.05, secondary: 1.15, primary: 1.25
   };
 
-  // Half the carriageway, matching what the tiles draw. Zero means the way is
-  // itself the thing you walk on, so there is nothing to step aside from.
+  // Half the carriageway, in metres, for every way the router will use. Zero
+  // means the way is itself the thing you walk on, so there is nothing to step
+  // aside from. Shared by the tile drawing and the pavement offset, so a street
+  // cannot be drawn one width and walked at another.
   var WAY_HALF = {
     footway: 0, path: 0, pedestrian: 0, steps: 0, cycleway: 0,
-    living_street: 3.0, residential: 3.0, unclassified: 3.0, service: 3.0,
-    tertiary: 3.0, secondary: 5.0, primary: 5.0
-  };
+    track: 0, bridleway: 0,
+    service: 2.0,                                  // back lanes and driveways
+    living_street: 3.0, residential: 3.0, unclassified: 3.0, tertiary: 3.0,
+    secondary: 5.0, primary: 5.0, trunk: 5.0,
+    motorway: 7.0                                  // drawn, but never walked:
+  };                                               // it is absent from WALKABLE
 
   var SIDE_EVIDENCE_M = 5;   // lateral GPS offset below this proves nothing
 
@@ -852,10 +863,29 @@
     if (!graph || graph.size < 8 || walk.length < 2) return walk;
     mpt = mpt || 2;
 
-    var snap = walk.map(function (p) {
-      var s = graph.nearest(p.lat, p.lng);
-      return (s.node >= 0 && s.dist <= ROUTE_SNAP_M) ? s.node : -1;
-    });
+    // Anchors: the fixes that actually landed on the network. A collar in a
+    // built-up area throws the odd fix a hundred metres or more off — 15 of the
+    // 74 in the bundled walks — and treating each of those as "route failed"
+    // gave up on two segments at once. Routing anchor to anchor instead steps
+    // straight over a bad fix, and the routed line passes close to where it
+    // should have been anyway.
+    var anchors = [];
+    for (var si = 0; si < walk.length; si++) {
+      var sn = graph.nearest(walk[si].lat, walk[si].lng);
+      if (sn.node >= 0 && sn.dist <= ROUTE_SNAP_M) anchors.push({ i: si, node: sn.node });
+    }
+    if (anchors.length < 2) return walk;
+
+    // The stretches to draw: anything before the first anchor and after the
+    // last is left as the GPS recorded it, since there is nothing to route to.
+    var spans = [];
+    if (anchors[0].i > 0) spans.push({ from: 0, to: anchors[0].i, route: null });
+    for (var ai = 0; ai < anchors.length - 1; ai++) {
+      spans.push({ from: anchors[ai].i, to: anchors[ai + 1].i,
+                   route: [anchors[ai].node, anchors[ai + 1].node] });
+    }
+    var lastA = anchors[anchors.length - 1].i;
+    if (lastA < walk.length - 1) spans.push({ from: lastA, to: walk.length - 1, route: null });
 
     var out = [];
     // Which pavement he is on. The GPS usually knows — a fix sits to one side
@@ -864,12 +894,12 @@
     // the British default: walk on the right, facing the oncoming traffic.
     var side = -1;
 
-    for (var i = 0; i < walk.length - 1; i++) {
-      var a = walk[i], b = walk[i + 1];
+    for (var i = 0; i < spans.length; i++) {
+      var a = walk[spans[i].from], b = walk[spans[i].to];
       var straight = haversineKm(a, b) * 1000;
       var nodes = null;
-      if (straight > ROUTE_MIN_M && snap[i] >= 0 && snap[i + 1] >= 0) {
-        var path = graph.route(snap[i], snap[i + 1],
+      if (spans[i].route && straight > ROUTE_MIN_M) {
+        var path = graph.route(spans[i].route[0], spans[i].route[1],
                                Math.max(180, straight * ROUTE_MAX_FACTOR));
         if (path && path.length > 1) nodes = path;
       }
@@ -1001,18 +1031,18 @@
       if (!w.geometry || w.geometry.length < 2) return;
       var t = w.tags || {};
       if (t.highway) {
-        var minor = t.highway === "footway" || t.highway === "path" || t.highway === "cycleway";
+        var halfW = WAY_HALF[t.highway];
+        if (halfW === undefined) halfW = 3.0;
+        var minor = halfW === 0;                   // drawn as a path, not a road
         var residential = t.highway === "residential" || t.highway === "living_street" ||
           t.highway === "unclassified" || t.highway === "tertiary";
         // A-roads and B-roads: wide enough for markings, and they get them.
-        var major = t.highway === "primary" || t.highway === "secondary" ||
-          t.highway === "trunk" || t.highway === "primary_link" ||
-          t.highway === "secondary_link" || t.highway === "trunk_link";
+        var major = halfW >= 5.0;
         for (var i = 0; i < w.geometry.length - 1; i++) {
           var p0 = toM(w.geometry[i].lat, w.geometry[i].lon);
           var p1 = toM(w.geometry[i + 1].lat, w.geometry[i + 1].lon);
           segs.push({ ax: p0.x, ay: p0.y, bx: p1.x, by: p1.y,
-                      half: minor ? 1.2 : (major ? 5.0 : 3.0),
+                      half: minor ? 1.2 : halfW,
                       major: major, minor: minor, residential: residential });
         }
       } else {
