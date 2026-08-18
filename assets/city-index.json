@@ -8,6 +8,26 @@
   "dashH": 3,
   "dashV": 4,
   "dirt": 20,
+  "dogs": {
+    "coats": [
+      "black",
+      "golden",
+      "chocolate",
+      "cream",
+      "grey",
+      "patched"
+    ],
+    "collarBase": 120,
+    "cols": 16,
+    "stride": 4,
+    "types": [
+      "labrador",
+      "terrier",
+      "spaniel",
+      "greyhound",
+      "collie"
+    ]
+  },
   "drain": 2,
   "drive": 11,
   "grass": 16,

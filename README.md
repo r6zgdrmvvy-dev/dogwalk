@@ -141,6 +141,15 @@ already watched is close to instant.
 walk the real streets yourself, with the dog following you rather than the other
 way round.
 
+Before you set off you say who your dog is: breed, colour, collar and name.
+There are five builds and six coats, drawn from the same lists the spritesheet
+was generated from so the buttons cannot drift out of step with the art. The
+collar is a separate tintable sprite laid over him rather than baked into the
+sheet — baking it would mean every breed times every coat times every collar,
+seven hundred odd frames to offer six colours; one overlay per breed costs five.
+The choice is kept in `localStorage`, and the dog trotting on the loading screen
+is yours.
+
 `WASD` or the arrow keys, shift to jog, space to grip the lead, `E` to let him
 off it, Escape to finish. On a phone a drag is a
 thumbstick that anchors wherever you put your thumb down, rather than panning
@@ -151,9 +160,19 @@ You start on the pavement outside his home, not in the middle of the road and
 not in the back garden: his home fix usually falls inside the footprint of his
 own house, and the nearest tile that merely is not a wall tends to be a garden
 hemmed in on three sides. Buildings and water are solid, and walking into a wall
-at an angle slides you along it. Hedges and garden walls are not solid, because
-they are a tile thick and blocking them would turn every front garden into a
-maze.
+at an angle slides you along it. So is the street furniture: parked cars are
+four metres of car and you weave between them, and you stop at lamp posts, bins,
+postboxes and benches rather than strolling through them. The dog is not stopped
+by the small ones, since those are the very things he is trying to get his nose
+into. Hedges and garden walls are not solid either, because they are a tile
+thick and blocking them would turn every front garden into a maze.
+
+Movement is timed off the wall clock rather than off Phaser's frame delta.
+Phaser smooths and clamps its delta towards a nominal 60fps: on a slow renderer
+it reported 16.7ms for every one of 29 frames that between them spanned two and
+a half seconds, so anything scaled by it ran at a fifth of the speed it was set
+to. Each frame is then split into steps of at most 25ms, because one long step
+at a jog can jump clean through a wall a metre thick.
 
 The dog follows on breadcrumbs rather than on a straight line to you — he walks
 where you walked, which keeps him out of the hedges and takes him round corners

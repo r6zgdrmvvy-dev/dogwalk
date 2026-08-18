@@ -294,6 +294,35 @@ async function waitForReady(page) {
     check("roam offers a choice of walker", await page.evaluate(() =>
       document.getElementById("roam-panel").classList.contains("open") &&
       document.querySelectorAll("#roam-who .who").length === 2));
+
+    // Your dog: breed, colour, collar and name. The collar is a separate
+    // tintable sprite rather than baked into the sheet, which is what keeps
+    // this from being seven hundred frames to offer six colours.
+    const pickers = await page.evaluate(() => ({
+      types: document.querySelectorAll("#pick-type button").length,
+      coats: document.querySelectorAll("#pick-coat button").length,
+      collars: document.querySelectorAll("#pick-collar button").length,
+      name: !!document.getElementById("roam-dog-name"),
+    }));
+    check("you can describe your own dog",
+          pickers.types === 5 && pickers.coats === 6 && pickers.collars === 6 && pickers.name,
+          JSON.stringify(pickers));
+    await page.fill("#roam-dog-name", "Bramble");
+    await page.click("#pick-type button:nth-child(3)");     // spaniel
+    await page.click("#pick-coat button:nth-child(2)");     // golden
+    await page.click("#pick-collar button:nth-child(2)");   // red
+    await page.waitForTimeout(400);
+    const picked = await page.evaluate(() => ({
+      type: window.dogwalk.state.dogType, coat: window.dogwalk.state.dogCoat,
+      collar: window.dogwalk.state.dogCollar, name: window.dogwalk.state.dogName,
+      saved: !!localStorage.getItem("dogwalk.dog.v1"),
+      title: document.title,
+    }));
+    check("the choice sticks and is remembered",
+          picked.type === "spaniel" && picked.coat === "golden" &&
+          picked.collar === "red" && picked.name === "Bramble" && picked.saved,
+          JSON.stringify(picked));
+    check("the page takes his name", /Bramble/.test(picked.title), picked.title);
     await page.click('#roam-who .who[data-who="him"]');
     await page.click("#btn-roam-go");
     await page.waitForTimeout(1200);
@@ -309,6 +338,23 @@ async function waitForReady(page) {
     const r0 = await roamProbe();
     check("roaming starts on open ground", r0.on && !r0.inWall, JSON.stringify(r0));
     check("camera follows the walker", r0.follow);
+
+    // The dog on screen is the dog you described, and the collar rides on him.
+    const look = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), d = window.dogwalk;
+      return { anim: s.dog.anims.currentAnim.key, frame: s.dog.frame.name,
+               want: d.dogFrame(d.state.dogType, d.state.dogCoat),
+               collar: s.dogCollar.frame.name,
+               wantCollar: d.collarFrame(d.state.dogType),
+               tint: s.dogCollar.tintTopLeft,
+               onDog: Math.abs(s.dogCollar.x - s.dog.x) < 0.01 &&
+                      Math.abs(s.dogCollar.y - s.dog.y) < 0.01 };
+    });
+    check("the dog on screen is the one you picked",
+          look.frame === look.want && /spaniel-golden/.test(look.anim), JSON.stringify(look));
+    check("the collar is his colour and stays on him",
+          look.collar === look.wantCollar && look.tint === 0xc4402f && look.onDog,
+          JSON.stringify(look));
 
     // Whichever way is actually open — a real start point is on a pavement,
     // which may run north-south, so "east" is not guaranteed to be walkable.

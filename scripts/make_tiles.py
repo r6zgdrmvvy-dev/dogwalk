@@ -841,6 +841,142 @@ def build_critters():
     return [squirrel(f) for f in range(4)]
 
 
+# -------------------------------------------------------------------- dogs ---
+# Seen from above a dog is a body, a head and a tail, and what tells two breeds
+# apart at this size is the proportion between them plus what the ears and tail
+# are doing. Colour does the rest of the work.
+DOG_TYPES = [
+    {"key": "labrador",  "len": 8, "wide": 2, "ears": "drop", "tail": "thick"},
+    {"key": "terrier",   "len": 5, "wide": 2, "ears": "perk", "tail": "stub"},
+    {"key": "spaniel",   "len": 6, "wide": 2, "ears": "long", "tail": "plume"},
+    {"key": "greyhound", "len": 9, "wide": 1, "ears": "back", "tail": "whip"},
+    {"key": "collie",    "len": 7, "wide": 2, "ears": "perk", "tail": "plume"},
+]
+
+DOG_COATS = [
+    {"key": "black",     "ramp": [(18, 18, 22), (30, 30, 36), (44, 44, 52), (60, 60, 70), (80, 80, 92)]},
+    {"key": "golden",    "ramp": [(120, 84, 38), (152, 112, 56), (184, 142, 78), (210, 172, 108), (232, 202, 146)]},
+    {"key": "chocolate", "ramp": [(52, 32, 22), (74, 48, 32), (98, 66, 44), (124, 88, 60), (152, 114, 82)]},
+    {"key": "cream",     "ramp": [(152, 132, 104), (182, 162, 132), (208, 190, 160), (228, 214, 188), (244, 234, 214)]},
+    {"key": "grey",      "ramp": [(58, 60, 64), (80, 82, 88), (104, 106, 112), (130, 132, 138), (158, 160, 166)]},
+    {"key": "patched",   "ramp": [(26, 26, 30), (44, 44, 50), (64, 64, 72), (196, 192, 186), (232, 230, 226)]},
+]
+
+def collar_sprite(t):
+    """Just the collar, on its own transparent frame, drawn white so it can be
+    tinted to any colour at runtime.
+
+    Baking the collar into the dog would mean a sheet of every type times every
+    coat times every collar — seven hundred odd frames to offer six colours.
+    One overlay per type costs five.
+    """
+    im = Image.new("RGBA", (WT, WT), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    cy, W, L = 8, t["wide"], t["len"]
+    bx1 = 13 - 3
+    d.rectangle([bx1 - 1, cy - W, bx1 - 1, cy + W], fill=(255, 255, 255, 255))
+    # A darker pixel on the shadow side so the band still reads as a band once
+    # it is tinted a flat colour.
+    im.putpixel((bx1 - 1, cy + W), (188, 188, 188, 255))
+    return im
+
+
+def dog_sprite(t, coat, frame):
+    """One frame of a dog trotting, from above, facing east.
+
+    Rotated to the heading at runtime like everything else that moves, so a
+    four-frame cycle covers every direction. The gait is in the legs and a
+    slight swing of the tail; the body stays put, because a dog seen from
+    directly above does not bob about the way a person does.
+    """
+    im = Image.new("RGBA", (WT, WT), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    r = coat["ramp"]
+    patchy = coat["key"] == "patched"
+
+    def rect_(x0, y0, x1, y1, c):
+        d.rectangle([max(0, x0), max(0, y0), min(WT - 1, x1), min(WT - 1, y1)], fill=c)
+
+    gait = [0, 1, 0, -1][frame % 4]
+    swing = [0, -1, 0, 1][frame % 4]
+    cy, W, L = 8, t["wide"], t["len"]
+
+    hx1 = 13
+    hx0 = hx1 - 2
+    bx1 = hx0 - 1
+    bx0 = bx1 - L + 1
+
+    # Legs first, so the body sits over them. Front and back pairs step opposite.
+    for lx, dirn in ((bx1 - 1, gait), (bx0 + 1, -gait)):
+        rect_(lx + dirn, cy - W - 1, lx + dirn, cy - W, r[0])
+        rect_(lx - dirn, cy + W, lx - dirn, cy + W + 1, r[0])
+
+    # Tail.
+    tail = t["tail"]
+    ty = cy + swing
+    if tail == "thick":
+        rect_(bx0 - 2, ty - 1, bx0 - 1, ty + 1, r[1])
+        rect_(bx0 - 2, ty - 1, bx0 - 1, ty - 1, r[2])
+    elif tail == "stub":
+        rect_(bx0 - 1, ty - 1, bx0 - 1, ty, r[1])
+    elif tail == "plume":
+        rect_(bx0 - 3, ty - 2, bx0 - 1, ty + 1, r[2])
+        rect_(bx0 - 3, ty - 2, bx0 - 1, ty - 2, r[3])
+    else:                                            # whip
+        rect_(bx0 - 3, ty, bx0 - 1, ty, r[1])
+
+    # Body, lit along its northern flank.
+    rect_(bx0, cy - W, bx1, cy + W, r[1])
+    rect_(bx0, cy - W, bx1, cy - W, r[2])
+    rect_(bx0, cy + W, bx1, cy + W, r[0])
+    if patchy:                                       # a black-and-white dog
+        rect_(bx0 + 1, cy - W, bx0 + 3, cy + W, r[3])
+        rect_(bx0 + 1, cy - W, bx0 + 3, cy - W, r[4])
+
+    # Head, and ears.
+    rect_(hx0, cy - W + 1, hx1, cy + W - 1, r[2])
+    rect_(hx0, cy - W + 1, hx1, cy - W + 1, r[3])
+    ears = t["ears"]
+    if ears == "drop":
+        rect_(hx0, cy - W, hx0 + 1, cy - W, r[1])
+        rect_(hx0, cy + W, hx0 + 1, cy + W, r[0])
+    elif ears == "perk":
+        rect_(hx0 + 1, cy - W - 1, hx0 + 1, cy - W, r[2])
+        rect_(hx0 + 1, cy + W, hx0 + 1, cy + W + 1, r[1])
+    elif ears == "long":
+        rect_(hx0 - 1, cy - W, hx0 + 1, cy - W + 1, r[1])
+        rect_(hx0 - 1, cy + W - 1, hx0 + 1, cy + W, r[0])
+    else:                                            # back, flat to the skull
+        rect_(hx0 + 1, cy - W + 1, hx0 + 2, cy - W + 1, r[1])
+    if patchy:
+        rect_(hx1 - 1, cy - W + 1, hx1, cy + W - 1, r[4])   # a white blaze
+
+    im.putpixel((min(WT - 1, hx1), cy), (20, 18, 18, 255))  # nose
+
+    solid = [[im.getpixel((x, y))[3] >= 128 for y in range(WT)] for x in range(WT)]
+    for y in range(WT):
+        for x in range(WT):
+            if solid[x][y]:
+                continue
+            if (x > 0 and solid[x - 1][y]) or (y > 0 and solid[x][y - 1]):
+                im.putpixel((x, y), (22, 20, 24, 175))
+    return im
+
+
+def build_dogs():
+    frames, index = [], {"types": [], "coats": [], "stride": 4}
+    index["types"] = [t["key"] for t in DOG_TYPES]
+    index["coats"] = [c["key"] for c in DOG_COATS]
+    for t in DOG_TYPES:
+        for c in DOG_COATS:
+            for f in range(4):
+                frames.append(dog_sprite(t, c, f))
+    index["collarBase"] = len(frames)
+    for t in DOG_TYPES:
+        frames.append(collar_sprite(t))
+    return frames, index
+
+
 def build_people():
     frames, index = [], {}
     for spec in WALKERS:
@@ -949,6 +1085,16 @@ def build():
     csheet.save(os.path.join(here, "assets", "critters.png"))
     index["critters"] = {"squirrel": 0}
 
+    dogs, dindex = build_dogs()
+    DCOLS = 16
+    drows = (len(dogs) + DCOLS - 1) // DCOLS
+    dsheet = Image.new("RGBA", (DCOLS * WT, drows * WT), (0, 0, 0, 0))
+    for i, im in enumerate(dogs):
+        dsheet.paste(im, ((i % DCOLS) * WT, (i // DCOLS) * WT))
+    dsheet.save(os.path.join(here, "assets", "dogs.png"))
+    dindex["cols"] = DCOLS
+    index["dogs"] = dindex
+
     index["_count"] = len(tiles)
     index["_cols"] = COLS
     index["_size"] = T
@@ -956,9 +1102,9 @@ def build():
     with open(os.path.join(here, "assets", "city-index.json"), "w") as f:
         json.dump(index, f, indent=2, sort_keys=True)
     pindex["_size"] = PT
-    print("wrote %d tiles (%dx%d), %d props (%dx%d) and %d walker frames"
+    print("wrote %d tiles (%dx%d), %d props (%dx%d), %d walker frames and %d dog frames"
           % (len(tiles), COLS * T, rows * T, len(props), COLS * PT, prows * PT,
-             len(people)))
+             len(people), len(dogs)))
     print(json.dumps(index, sort_keys=True))
 
 

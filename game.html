@@ -46,14 +46,16 @@
   #bar i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.2s ease; }
 
   /* The dog himself, trotting on the spot: the four-frame walk cycle from the
-     game's own sprite sheet, stepped so the pixels stay hard-edged. */
+     game's own sprite sheet, stepped so the pixels stay hard-edged. Which four
+     frames depends on the dog you picked, so the loading screen shows yours. */
   .trotting {
+    --fx: 0px; --fy: 0px;
     width: 64px; height: 64px;
-    background: url(assets/dog-topdown.png) 0 0 / 256px 64px;
+    background: url(assets/dogs.png) var(--fx) var(--fy) / 1024px 512px;
     image-rendering: pixelated;
     animation: trot 0.55s steps(4) infinite;
   }
-  @keyframes trot { to { background-position: -256px 0; } }
+  @keyframes trot { to { background-position: calc(var(--fx) - 256px) var(--fy); } }
 
   #loader {
     position: fixed; inset: 0; z-index: 40;
@@ -228,7 +230,11 @@
     position: fixed; z-index: 45; inset: 0; display: none;
     background: rgba(8, 6, 4, 0.78); padding: 20px; overflow: auto;
   }
-  #roam-panel.open { display: flex; align-items: center; justify-content: center; }
+  /* flex-start plus auto margins, not centring: the card is tall enough with
+     the dog pickers in it that centring puts its head above the scroll top on a
+     phone, where you can never reach it again. */
+  #roam-panel.open { display: flex; align-items: flex-start; justify-content: center; }
+  #roam-panel .card { margin: auto 0; }
   #roam-panel .card {
     background: #1c1713; border: 2px solid var(--panel-edge); border-radius: 14px;
     padding: 18px; width: min(400px, 100%);
@@ -236,6 +242,33 @@
   #roam-panel h3 { margin: 0 0 6px; font-size: 18px; }
   #roam-panel p { margin: 0 0 14px; font-size: 13px; opacity: 0.75; line-height: 1.45; }
   #roam-panel .row { display: flex; gap: 8px; margin-top: 16px; }
+  #roam-panel h4 {
+    margin: 18px 0 8px; font-size: 13px; text-transform: uppercase;
+    letter-spacing: 0.06em; opacity: 0.55; font-weight: 700;
+  }
+  #roam-panel .field { display: block; font-size: 12px; opacity: 0.75; margin-bottom: 10px; }
+  #roam-panel .field input {
+    display: block; width: 100%; margin-top: 4px; box-sizing: border-box;
+    background: rgba(255,255,255,0.05); border: 2px solid var(--panel-edge);
+    border-radius: 8px; padding: 7px 9px; color: var(--ink); font: inherit; font-size: 14px;
+  }
+  .dog-preview { display: flex; justify-content: center; padding: 2px 0 8px; }
+  .dog-preview canvas { image-rendering: pixelated; width: 96px; height: 96px; }
+  .pick-row { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .pick-row > span { font-size: 12px; opacity: 0.6; width: 52px; padding-top: 5px; flex: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chips button {
+    background: transparent; color: var(--ink); border: 1px solid var(--panel-edge);
+    border-radius: 20px; padding: 3px 10px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  .chips button.on { background: var(--accent-dark); border-color: var(--accent); }
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+  .swatches button {
+    width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
+    border: 2px solid var(--panel-edge); padding: 0;
+  }
+  .swatches button.on { border-color: var(--ink); box-shadow: 0 0 0 2px var(--accent); }
+
   #roam-who { display: flex; gap: 10px; }
   .who {
     flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
@@ -446,6 +479,16 @@
       <button class="who on" data-who="her"><canvas width="48" height="48"></canvas><span>Her</span></button>
       <button class="who" data-who="him"><canvas width="48" height="48"></canvas><span>Him</span></button>
     </div>
+
+    <h4>And the dog</h4>
+    <div class="dog-preview"><canvas id="dog-canvas" width="96" height="96"></canvas></div>
+    <label class="field">Name
+      <input type="text" id="roam-dog-name" placeholder="Your Dog" maxlength="24">
+    </label>
+    <div class="pick-row"><span>Breed</span><div id="pick-type" class="chips"></div></div>
+    <div class="pick-row"><span>Colour</span><div id="pick-coat" class="chips"></div></div>
+    <div class="pick-row"><span>Collar</span><div id="pick-collar" class="swatches"></div></div>
+
     <div class="row">
       <button class="btn primary" id="btn-roam-go">Off we go</button>
       <button class="btn" id="btn-roam-cancel">Not now</button>
@@ -560,7 +603,8 @@
   var state = {
     points: [], walks: [], bounds: null, territory: null, grid: null, activeWalk: -1, wx: null,
     stops: [], roamed: [],
-    osmWays: null, dogName: "Your Dog"
+    osmWays: null, dogName: "Your Dog",
+    dogType: "labrador", dogCoat: "black", dogCollar: "green"
   };
 
   function seededRandom(seed) {
@@ -2207,8 +2251,40 @@
   // units the routing and the fog already use, and only converted to pixels
   // at the point of drawing.
   var WALKER_FRAME = { her: 0, him: 4 };     // matches assets/city-index.json
-  var WALK_MS = 1.45;                        // an ordinary walking pace, m/s
-  var JOG_MS = 2.9;                          // holding shift
+
+  // Your dog, as you describe him. Frame order in assets/dogs.png is type-major
+  // then coat, four frames each; the collars are five single frames on the end,
+  // drawn white so one of them can be tinted to any colour rather than baking
+  // every combination into the sheet.
+  var DOG_TYPES = ["labrador", "terrier", "spaniel", "greyhound", "collie"];
+  var DOG_COATS = ["black", "golden", "chocolate", "cream", "grey", "patched"];
+  var DOG_COLLAR_BASE = 120;
+  var TYPE_LABEL = { labrador: "Labrador", terrier: "Terrier", spaniel: "Spaniel",
+                     greyhound: "Greyhound", collie: "Collie" };
+  var COAT_LABEL = { black: "Black", golden: "Golden", chocolate: "Chocolate",
+                     cream: "Cream", grey: "Grey", patched: "Black & white" };
+  var COLLARS = [
+    { key: "green", hex: 0x3ab054 }, { key: "red", hex: 0xc4402f },
+    { key: "blue", hex: 0x3d78c0 }, { key: "orange", hex: 0xd9822b },
+    { key: "purple", hex: 0x8a5bbf }, { key: "pink", hex: 0xd96a9a }
+  ];
+
+  function dogFrame(type, coat) {
+    var ti = Math.max(0, DOG_TYPES.indexOf(type || "labrador"));
+    var ci = Math.max(0, DOG_COATS.indexOf(coat || "black"));
+    return (ti * DOG_COATS.length + ci) * 4;
+  }
+  function collarFrame(type) {
+    return DOG_COLLAR_BASE + Math.max(0, DOG_TYPES.indexOf(type || "labrador"));
+  }
+  function collarHex(key) {
+    for (var i = 0; i < COLLARS.length; i++) if (COLLARS[i].key === key) return COLLARS[i].hex;
+    return COLLARS[0].hex;
+  }
+  // Faster than the 1.45 m/s a person really walks. Real pace is correct and
+  // felt like wading; a game wants to cover ground.
+  var WALK_MS = 2.2;                         // m/s
+  var JOG_MS = 4.3;                          // holding shift
   var BODY_R = 0.7;                          // how wide he is, for walls
   var LEASH_M = 3.4;                         // how far back the dog trails
   var LEAD_M = 4.6;                          // the lead's actual length
@@ -2236,7 +2312,7 @@
   var roam = {
     on: false, who: "her",
     x: 0, y: 0, hx: 1, hy: 0,                // position and facing
-    metres: 0, still: 0, lastReveal: null, startedAt: 0,
+    metres: 0, still: 0, lastReveal: null, startedAt: 0, lastTick: 0,
     trail: [],                               // breadcrumbs, newest last
     dog: { x: 0, y: 0, h: 0, wander: null, moving: false, ran: 0,
            want: null, sniffFor: 0, strainFor: 0 },
@@ -2255,7 +2331,7 @@
       this.load.on("progress", function (v) { setProgress(v * 9, "Loading the art"); });
       this.load.spritesheet("tiles", "assets/city.png", { frameWidth: TS, frameHeight: TS });
       this.load.spritesheet("props", "assets/props.png", { frameWidth: PS, frameHeight: PS });
-      this.load.spritesheet("dog", "assets/dog-topdown.png", { frameWidth: 16, frameHeight: 16 });
+      this.load.spritesheet("dogs", "assets/dogs.png", { frameWidth: 16, frameHeight: 16 });
       this.load.spritesheet("people", "assets/people.png", { frameWidth: 16, frameHeight: 16 });
       this.load.spritesheet("critters", "assets/critters.png", { frameWidth: 16, frameHeight: 16 });
     }
@@ -2268,16 +2344,7 @@
 
     create() {
       scene = this;
-      this.anims.create({
-        key: "trot",
-        frames: this.anims.generateFrameNumbers("dog", { start: 0, end: 3 }),
-        frameRate: 6, repeat: -1
-      });
-      this.anims.create({
-        key: "sit",
-        frames: this.anims.generateFrameNumbers("dog", { start: 0, end: 0 }),
-        frameRate: 1, repeat: -1
-      });
+      this.setDogLook(state.dogType, state.dogCoat);
       this.anims.create({
         key: "bound",
         frames: this.anims.generateFrameNumbers("critters", { start: 0, end: 3 }),
@@ -2382,11 +2449,39 @@
         this.cameras.main.setPostPipeline(GradeFX);
       }
 
+      this.events.on(Phaser.Scenes.Events.POST_UPDATE, this.syncCollar, this);
       this.scale.on("resize", this.fitOverlays, this);
       this.fitOverlays();
       this.setTimeOfDay(state.points.length ? state.points[0].t : null);
       sceneReady = true;
       if (firstMapIn) hideBoot();
+    }
+
+    // What your dog looks like. The animations are made once per combination
+    // asked for, since there are thirty of them and you will only ever see one.
+    dogAnim(kind) {
+      return kind + "-" + (state.dogType || "labrador") + "-" + (state.dogCoat || "black");
+    }
+
+    setDogLook(type, coat) {
+      var f = dogFrame(type, coat);
+      var trot = "trot-" + (type || "labrador") + "-" + (coat || "black");
+      var sit = "sit-" + (type || "labrador") + "-" + (coat || "black");
+      if (!this.anims.exists(trot)) {
+        this.anims.create({ key: trot, frameRate: 6, repeat: -1,
+          frames: this.anims.generateFrameNumbers("dogs", { start: f, end: f + 3 }) });
+        this.anims.create({ key: sit, frameRate: 1, repeat: -1,
+          frames: this.anims.generateFrameNumbers("dogs", { start: f, end: f }) });
+      }
+      if (this.dog) {
+        var was = this.dog.anims.currentAnim;
+        this.dog.play(was && was.key.indexOf("trot") === 0 ? trot : sit);
+      }
+      // The collar rides on top as its own sprite so it can be any colour.
+      if (!this.dogCollar) {
+        this.dogCollar = this.add.sprite(0, 0, "dogs").setOrigin(0.5, 0.5).setVisible(false);
+      }
+      this.dogCollar.setFrame(collarFrame(type)).setTint(collarHex(state.dogCollar));
     }
 
     // Broken cloud, seen from underneath: soft patches that darken the ground
@@ -2820,8 +2915,8 @@
         // Origin dead centre: this is a sprite seen from above, so there are no
         // feet to stand on the spot. It was inherited from the old side-on
         // sprite and drew him a few pixels north of where he really was.
-        this.dog = this.add.sprite(0, 0, "dog").setOrigin(0.5, 0.5);
-        this.dog.play("sit");
+        this.dog = this.add.sprite(0, 0, "dogs").setOrigin(0.5, 0.5);
+        this.dog.play(this.dogAnim("sit"));
       }
       this.dogGfx = this.dogGfx || this.add.graphics();
       this.dogGfx.setDepth(99999);
@@ -2951,11 +3046,62 @@
       return !!w.solid[ty * w.cols + tx];
     }
 
+    // Street furniture you should not be able to stroll through. Boxes rather
+    // than circles, because a parked car is four metres of car and treating it
+    // as a dot let you walk clean through the middle of it. Bucketed at 16m so
+    // the test is a handful of comparisons.
+    buildBlockers() {
+      var w = this.worldRef, B = 16, map = {};
+      var isEW = PROP.carEW.indexOf.bind(PROP.carEW);
+      var isNS = PROP.carNS.indexOf.bind(PROP.carNS);
+      (w.props || []).forEach(function (p) {
+        var hw, hh, small;
+        if (isEW(p.t) >= 0) { hw = 2.0; hh = 0.85; small = false; }
+        else if (isNS(p.t) >= 0) { hw = 0.85; hh = 2.0; small = false; }
+        else if (p.t === PROP.bench) { hw = 1.1; hh = 0.5; small = true; }
+        else { hw = 0.4; hh = 0.4; small = true; }     // lamp, bin, postbox
+        var box = { x: p.x, y: p.y, hw: hw, hh: hh, small: small };
+        var k = Math.floor(p.x / B) + "," + Math.floor(p.y / B);
+        (map[k] = map[k] || []).push(box);
+      });
+      this.blockers = { B: B, map: map };
+    }
+
+    // `smallToo` is false for the dog: he is small enough to get right up to a
+    // lamp post, and blocking him on the very things he wants to sniff would
+    // mean he could never reach any of them.
+    propAt(mx, my, r, smallToo) {
+      var bk = this.blockers;
+      if (!bk) return false;
+      var B = bk.B, cx = Math.floor(mx / B), cy = Math.floor(my / B);
+      for (var oy = -1; oy <= 1; oy++) {
+        for (var ox = -1; ox <= 1; ox++) {
+          var cell = bk.map[(cx + ox) + "," + (cy + oy)];
+          if (!cell) continue;
+          for (var i = 0; i < cell.length; i++) {
+            var b = cell[i];
+            if (b.small && !smallToo) continue;
+            if (Math.abs(mx - b.x) < b.hw + r && Math.abs(my - b.y) < b.hh + r) return true;
+          }
+        }
+      }
+      return false;
+    }
+
     // The body has width, so a corner has to be tested at its corners rather
     // than at its centre — otherwise you clip through the diagonal of a wall.
     blocked(mx, my) {
-      return this.solidAt(mx - BODY_R, my - BODY_R) || this.solidAt(mx + BODY_R, my - BODY_R) ||
-             this.solidAt(mx - BODY_R, my + BODY_R) || this.solidAt(mx + BODY_R, my + BODY_R);
+      if (this.solidAt(mx - BODY_R, my - BODY_R) || this.solidAt(mx + BODY_R, my - BODY_R) ||
+          this.solidAt(mx - BODY_R, my + BODY_R) || this.solidAt(mx + BODY_R, my + BODY_R)) {
+        return true;
+      }
+      return this.propAt(mx, my, BODY_R, true);
+    }
+
+    // Where the dog may go. Buildings, water and anything car-sized; not the
+    // lamp posts and bins, which are the point of the walk.
+    dogBlocked(mx, my) {
+      return this.solidAt(mx, my) || this.propAt(mx, my, 0.35, false);
     }
 
     // Somewhere sensible to start from, spiralling out from his home fix.
@@ -3088,7 +3234,9 @@
       roam.squirrel = null; roam.recalling = false;
       roam.nextSquirrel = SQUIRREL_EVERY[0];
       roam.startedAt = Date.now();
+      roam.lastTick = 0;
       this.buildInterests();
+      this.buildBlockers();
 
       this.leadGfx = this.leadGfx || this.add.graphics().setDepth(99998);
       this.leadGfx.clear();
@@ -3106,7 +3254,7 @@
       var scale = this.worldScale;
       this.walker.setPosition(roam.x * scale, roam.y * scale);
       this.dog.setPosition(roam.dog.x * scale, roam.dog.y * scale).setVisible(true);
-      this.dog.play("sit");
+      this.dog.play(this.dogAnim("sit"));
       if (this.liveGfx) this.liveGfx.clear();
       if (this.dogGfx) this.dogGfx.clear();
 
@@ -3130,7 +3278,7 @@
       var cam = this.cameras.main;
       cam.stopFollow();
       this.setZoom(this.fitZoom, true);
-      if (this.dog) this.dog.play("sit");
+      if (this.dog) this.dog.play(this.dogAnim("sit"));
     }
 
     // One frame of roaming: read the controls, move, slide along whatever you
@@ -3138,11 +3286,18 @@
     updateRoam(delta) {
       var w = this.worldRef, scale = this.worldScale;
       if (!w || !this.walker) return;
-      // A long frame is split into short steps rather than clamped, for two
-      // reasons: clamping quietly throws the time away, so on anything short of
-      // a smooth 60fps you walk in slow motion; and a single long step at jog
-      // speed can jump clean through a wall a metre thick.
-      var total = Math.min(0.25, delta / 1000);
+      // Time comes off the wall clock, not off Phaser's delta. Phaser smooths
+      // and clamps its delta towards a nominal 60fps: on a slow renderer it
+      // reported 16.7ms for every one of 29 frames that between them spanned
+      // 2.5 seconds, so anything scaled by it ran at a fifth of the speed it
+      // was set to. Walking pace has to be the pace you set whatever the frame
+      // rate is doing.
+      var now = (window.performance && performance.now) ? performance.now() : Date.now();
+      var total = roam.lastTick ? Math.min(0.25, (now - roam.lastTick) / 1000) : 0.016;
+      roam.lastTick = now;
+
+      // The frame is then split into short steps rather than taken in one: a
+      // single long step at jog speed can jump clean through a thin wall.
       var steps = Math.max(1, Math.ceil(total / 0.025));
       var dt = total / steps;
 
@@ -3305,7 +3460,7 @@
           this.floatText(d.x, d.y, d.want.name || SNIFF_LABEL[d.want.kind] || "a good sniff");
           d.want = null;
         }
-        if (d.moving) { d.moving = false; this.dog.play("sit"); }
+        if (d.moving) { d.moving = false; this.dog.play(this.dogAnim("sit")); }
         this.dog.setPosition(d.x * scale, d.y * scale).setRotation(d.h);
         return;
       }
@@ -3350,12 +3505,12 @@
                             : Math.min(DOG_SPEED, Math.max(0.6, dist * 1.9));
         var step = Math.min(dist, v * dt);
         var nx = d.x + dx / dist * step, ny = d.y + dy / dist * step;
-        if (!this.solidAt(nx, ny)) { d.ran = Math.hypot(nx - d.x, ny - d.y); d.x = nx; d.y = ny; }
+        if (!this.dogBlocked(nx, ny)) { d.ran = Math.hypot(nx - d.x, ny - d.y); d.x = nx; d.y = ny; }
         d.h = Math.atan2(dy, dx);
-        if (!d.moving) { d.moving = true; this.dog.play("trot"); }
+        if (!d.moving) { d.moving = true; this.dog.play(this.dogAnim("trot")); }
       } else if (d.moving) {
         d.moving = false;
-        this.dog.play("sit");
+        this.dog.play(this.dogAnim("sit"));
       }
 
       // Close enough, and not being hauled away: he gets his sniff.
@@ -3415,7 +3570,7 @@
         // Out of a garden or a park — somewhere with something to climb.
         var th = Math.random() * Math.PI * 2, r = 7 + Math.random() * 5;
         var sx = roam.dog.x + Math.cos(th) * r, sy = roam.dog.y + Math.sin(th) * r;
-        if (this.solidAt(sx, sy)) { roam.nextSquirrel = 4; return; }
+        if (this.dogBlocked(sx, sy)) { roam.nextSquirrel = 4; return; }
         var away = th + (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.8);
         roam.squirrel = sq = { x: sx, y: sy, vx: Math.cos(away) * 5.5,
                                vy: Math.sin(away) * 5.5, life: SQUIRREL_LIFE, ungripped: 0 };
@@ -3426,7 +3581,7 @@
 
       sq.life -= dt;
       var nx = sq.x + sq.vx * dt, ny = sq.y + sq.vy * dt;
-      if (this.solidAt(nx, ny)) { sq.vx = -sq.vy; sq.vy = -sq.vx; }   // off a wall
+      if (this.dogBlocked(nx, ny)) { var t = sq.vx; sq.vx = -sq.vy; sq.vy = t; }   // off a wall
       else { sq.x = nx; sq.y = ny; }
       this.critter.setPosition(sq.x * scale, sq.y * scale)
                   .setRotation(Math.atan2(sq.vy, sq.vx));
@@ -3602,6 +3757,19 @@
       }
     }
 
+    // The collar is a separate sprite so its colour can be chosen, which means
+    // it has to be put back on the dog every frame — he is moved from half a
+    // dozen places and none of them should have to remember. It runs on
+    // post-update rather than update: update has several early returns, and
+    // syncing before the dog has moved leaves the collar a frame behind him,
+    // which at a jog is most of a metre.
+    syncCollar() {
+      if (!this.dogCollar || !this.dog) return;
+      this.dogCollar.setPosition(this.dog.x, this.dog.y)
+        .setRotation(this.dog.rotation).setDepth(this.dog.depth + 1)
+        .setVisible(this.dog.visible);
+    }
+
     update(time, delta) {
       this.fitOverlays(delta);
       this.handlePinch();
@@ -3610,7 +3778,7 @@
       pb.elapsed += delta * pb.speed;
       var progress = Math.min(pb.elapsed / pb.duration, 1);
       this.applyProgress(progress);
-      if (progress >= 1) { pb.playing = false; setPlayLabel(); this.dog.play("sit"); }
+      if (progress >= 1) { pb.playing = false; setPlayLabel(); this.dog.play(this.dogAnim("sit")); }
     }
 
     handlePinch() {
@@ -3903,7 +4071,7 @@
       renderWalkList();
       if (scene) {
         scene.lastReveal = null;
-        scene.dog.play("trot");
+        scene.dog.play(scene.dogAnim("trot"));
         scene.applyProgress(0);
         scene.setZoom(3, true);
         scene.setFreeCam(false);
@@ -3923,7 +4091,7 @@
       scene.cameras.main.stopFollow();
       scene.liveGfx.clear();
       scene.dogGfx.clear();
-      scene.dog.play("sit");
+      scene.dog.play(scene.dogAnim("sit"));
     }
     renderWalkList();
   }
@@ -4543,6 +4711,132 @@
     });
   }
 
+  // ---------- who your dog is ----------
+  // Built from the same lists the spritesheet was generated from, and drawn
+  // from the sheet itself, so the buttons cannot drift out of step with the art.
+  function buildDogPickers() {
+    var mk = function (host, items, get, set) {
+      host.innerHTML = "";
+      items.forEach(function (it) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = it.label;
+        b.className = get() === it.key ? "on" : "";
+        b.addEventListener("click", function () {
+          set(it.key);
+          host.querySelectorAll("button").forEach(function (o) { o.classList.remove("on"); });
+          b.classList.add("on");
+          drawDogPreview();
+        });
+        host.appendChild(b);
+      });
+    };
+    mk(document.getElementById("pick-type"),
+       DOG_TYPES.map(function (k) { return { key: k, label: TYPE_LABEL[k] }; }),
+       function () { return state.dogType; },
+       function (v) { state.dogType = v; });
+    mk(document.getElementById("pick-coat"),
+       DOG_COATS.map(function (k) { return { key: k, label: COAT_LABEL[k] }; }),
+       function () { return state.dogCoat; },
+       function (v) { state.dogCoat = v; });
+
+    var host = document.getElementById("pick-collar");
+    host.innerHTML = "";
+    COLLARS.forEach(function (c) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.title = c.key;
+      b.setAttribute("aria-label", c.key + " collar");
+      b.style.background = "#" + c.hex.toString(16).padStart(6, "0");
+      b.className = state.dogCollar === c.key ? "on" : "";
+      b.addEventListener("click", function () {
+        state.dogCollar = c.key;
+        host.querySelectorAll("button").forEach(function (o) { o.classList.remove("on"); });
+        b.classList.add("on");
+        drawDogPreview();
+      });
+      host.appendChild(b);
+    });
+
+    var nameEl = document.getElementById("roam-dog-name");
+    nameEl.value = state.dogName === "Your Dog" ? "" : state.dogName;
+    nameEl.oninput = function () {
+      applyDogName(nameEl.value);
+      roamPanelWords();
+      if (loadLocal()) saveLocal();
+    };
+  }
+
+  // The dog as chosen, drawn straight from the sheet with the collar laid over
+  // it exactly as the game does it.
+  function drawDogPreview() {
+    if (!scene || !scene.textures.exists("dogs")) return;
+    var src = scene.textures.get("dogs").getSourceImage();
+    var ctx = document.getElementById("dog-canvas").getContext("2d");
+    var COLS = 16, S = 6;
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, 96, 96);
+    var draw = function (frame) {
+      ctx.drawImage(src, (frame % COLS) * 16, Math.floor(frame / COLS) * 16, 16, 16,
+                    0, 0, 96, 96);
+    };
+    draw(dogFrame(state.dogType, state.dogCoat));
+    // Tint the collar the same way the game does: draw it, then multiply the
+    // colour through it, keeping the alpha of the band itself.
+    var pad = document.createElement("canvas");
+    pad.width = pad.height = 96;
+    var p = pad.getContext("2d");
+    p.imageSmoothingEnabled = false;
+    var cf = collarFrame(state.dogType);
+    p.drawImage(src, (cf % COLS) * 16, Math.floor(cf / COLS) * 16, 16, 16, 0, 0, 96, 96);
+    p.globalCompositeOperation = "source-in";
+    p.fillStyle = "#" + collarHex(state.dogCollar).toString(16).padStart(6, "0");
+    p.fillRect(0, 0, 96, 96);
+    ctx.drawImage(pad, 0, 0);
+    if (scene.setDogLook) scene.setDogLook(state.dogType, state.dogCoat);
+    applyTrotFrames();
+    saveDogLook();
+  }
+
+  // The loading spinner is the same spritesheet as a CSS background, so it has
+  // to be pointed at the right four frames when the dog changes.
+  function applyTrotFrames() {
+    var f = dogFrame(state.dogType, state.dogCoat);
+    var fx = -(f % 16) * 64, fy = -Math.floor(f / 16) * 64;
+    document.querySelectorAll(".trotting").forEach(function (el) {
+      el.style.setProperty("--fx", fx + "px");
+      el.style.setProperty("--fy", fy + "px");
+    });
+  }
+
+  var LOOK_KEY = "dogwalk.dog.v1";
+  function saveDogLook() {
+    try {
+      localStorage.setItem(LOOK_KEY, JSON.stringify({
+        type: state.dogType, coat: state.dogCoat, collar: state.dogCollar }));
+    } catch (e) { /* a full quota costs you the choice, not the walk */ }
+  }
+  function loadDogLook() {
+    try {
+      var v = JSON.parse(localStorage.getItem(LOOK_KEY) || "null");
+      if (!v) return;
+      if (DOG_TYPES.indexOf(v.type) >= 0) state.dogType = v.type;
+      if (DOG_COATS.indexOf(v.coat) >= 0) state.dogCoat = v.coat;
+      if (COLLARS.some(function (c) { return c.key === v.collar; })) state.dogCollar = v.collar;
+    } catch (e) { /* defaults are a black labrador in a green collar */ }
+  }
+
+  // The panel calls him by name as soon as you give him one.
+  function roamPanelWords() {
+    var who = state.dogName || "him";
+    document.getElementById("roam-head").textContent =
+      state.dogName ? "Take " + state.dogName + " out yourself" : "Take him out yourself";
+    document.getElementById("roam-blurb").textContent =
+      "Walk the real streets " + (state.dogName || "he") + " knows and " +
+      (state.dogName ? "he" : "he") + " will follow you. Pick who is holding the lead.";
+    return who;
+  }
+
   function startRoam() {
     if (!scene || !scene.worldRef) { toast("The map is still loading"); return; }
     if (pb.walk) stopWalk();
@@ -4599,11 +4893,9 @@
   document.getElementById("btn-roam").addEventListener("click", function () {
     if (roam.on) { stopRoam(); return; }
     drawWhoPreviews();
-    document.getElementById("roam-blurb").textContent =
-      "Walk the real streets " + (state.dogName || "he") + " knows and he will follow you. " +
-      "Pick who is holding the lead.";
-    document.getElementById("roam-head").textContent =
-      state.dogName ? "Take " + state.dogName + " out yourself" : "Take him out yourself";
+    buildDogPickers();
+    drawDogPreview();
+    roamPanelWords();
     document.getElementById("roam-panel").classList.add("open");
   });
   document.getElementById("btn-roam-go").addEventListener("click", startRoam);
@@ -4767,7 +5059,7 @@
   document.getElementById("scrub").addEventListener("input", function (e) {
     if (!pb.walk) return;
     pb.playing = false; setPlayLabel();
-    if (scene) scene.dog.play("sit");
+    if (scene) scene.dog.play(scene.dogAnim("sit"));
     pb.elapsed = (Number(e.target.value) / 1000) * pb.duration;
     if (scene) scene.applyProgress(Number(e.target.value) / 1000);
   });
@@ -4794,6 +5086,10 @@
     if (force) toast("Sample walks restored");
   }
 
+  // Read before the scene boots: WorldScene.create makes the animations for
+  // whichever dog you last chose, so it has to already know which that is.
+  loadDogLook();
+
   game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "game",
@@ -4804,9 +5100,12 @@
     scene: [BootScene, WorldScene]
   });
   window.game = game;   // debug handle
-  window.dogwalk = { state: state, weatherAt: weatherAt, roam: roam };   // for tests
+  // for tests
+  window.dogwalk = { state: state, weatherAt: weatherAt, roam: roam,
+                     dogFrame: dogFrame, collarFrame: collarFrame };
 
   loadRoamed();
+  applyTrotFrames();
 
   if (window.matchMedia("(max-width: 720px)").matches) {
     document.getElementById("walks").classList.add("hidden");
