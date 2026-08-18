@@ -364,6 +364,152 @@ async function waitForReady(page) {
         x: r2.x.toFixed(1), inWall: r2.inWall }));
     }
 
+    // The lead. He wants things; you decide whether he gets them; the lead is
+    // where those two meet. Everything below is that one mechanic.
+    const spacing = await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      let worst = Infinity;
+      for (let i = 0; i < Math.min(400, r.interests.length); i++) {
+        for (let j = i + 1; j < Math.min(400, r.interests.length); j++) {
+          const d = Math.hypot(r.interests[i].x - r.interests[j].x,
+                               r.interests[i].y - r.interests[j].y);
+          if (d < worst) worst = d;
+        }
+      }
+      return { n: r.interests.length, closest: worst };
+    });
+    // Every tree in the town would be tens of thousands, he would want
+    // something at every step, and the choice would stop being a choice.
+    check("things to sniff are thinned out", spacing.n > 0 && spacing.closest >= 7.9,
+          spacing.n + " interests, closest pair " + spacing.closest.toFixed(1) + "m");
+
+    // Let him have one: stand beside it and wait.
+    const target = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      const it = s.nearestWant(r.x, r.y, 90);
+      if (!it) return null;
+      for (let a = 0; a < 16; a++) {
+        const th = a * Math.PI / 8;
+        const x = it.x + Math.cos(th) * 2.5, y = it.y + Math.sin(th) * 2.5;
+        if (s.blocked(x, y)) continue;
+        r.x = x; r.y = y; r.dog.x = x; r.dog.y = y; r.dog.want = null;
+        return { kind: it.kind };
+      }
+      return null;
+    });
+    check("he finds something worth a sniff", !!target, JSON.stringify(target));
+    await page.waitForTimeout(5000);
+    const sniff = await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      return { joy: r.joy, sniffed: r.sniffed.length };
+    });
+    check("letting him sniff makes it a better walk",
+          sniff.sniffed > 0 && sniff.joy > 0, JSON.stringify(sniff));
+
+    // Refuse him one: walk away and the lead comes taut, then he drops it.
+    const awayKey = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      if (!r.dog.want) return null;
+      const away = r.dog.want.x > r.x ? -1 : 1;
+      if (s.blocked(r.x + away * 5, r.y)) return null;
+      return away < 0 ? "ArrowLeft" : "ArrowRight";
+    });
+    if (awayKey) {
+      // Tension rises and falls as he takes up wants and drops them, so the
+      // peak over the stretch is the thing to measure — a single sample lands
+      // wherever it lands.
+      await page.evaluate(() => {
+        window.__peak = { t: 0, gap: 0 };
+        window.__peakTimer = setInterval(() => {
+          const r = window.dogwalk.roam;
+          window.__peak.t = Math.max(window.__peak.t, r.tension);
+          window.__peak.gap = Math.max(window.__peak.gap,
+            Math.hypot(r.x - r.dog.x, r.y - r.dog.y));
+        }, 40);
+      });
+      await page.keyboard.down(awayKey);
+      await page.waitForTimeout(5000);
+      await page.keyboard.up(awayKey);
+      const taut = await page.evaluate(() => {
+        clearInterval(window.__peakTimer);
+        return { peak: window.__peak, refused: window.dogwalk.roam.refused };
+      });
+      check("walking on pulls the lead taut", taut.peak.t > 0.5, JSON.stringify(taut.peak));
+      check("the lead actually holds him", taut.peak.gap < 7, taut.peak.gap.toFixed(1) + "m");
+      check("he gives up on what he cannot reach", taut.refused > 0, taut.refused);
+    }
+
+    // A squirrel. Not gripping means he is off after it.
+    await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      r.metres = Math.max(r.metres, 30); r.nextSquirrel = 0; r.gripping = false;
+    });
+    await page.waitForTimeout(1200);
+    check("a squirrel turns up", await page.evaluate(() =>
+      !!window.dogwalk.roam.squirrel &&
+      window.game.scene.getScene("world").critter.visible));
+    check("the hold prompt appears", await page.evaluate(() =>
+      !document.getElementById("btn-roam-hold").classList.contains("off")));
+    await page.waitForTimeout(2200);
+    check("not gripping and he slips the lead", await page.evaluate(() =>
+      window.dogwalk.roam.slipped > 0 || window.dogwalk.roam.offLead),
+      await page.evaluate(() => JSON.stringify({
+        slipped: window.dogwalk.roam.slipped, off: window.dogwalk.roam.offLead })));
+    await page.waitForTimeout(5000);
+    check("he comes back and is caught", await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      return !r.squirrel && (!r.offLead || r.recalling);
+    }), await page.evaluate(() => JSON.stringify({
+      off: window.dogwalk.roam.offLead, recalling: window.dogwalk.roam.recalling })));
+
+    // Off the lead is a park thing.
+    await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      r.offLead = false; r.recalling = false; r.warn = "";
+    });
+    await page.waitForTimeout(400);
+    const parked = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), w = s.worldRef, r = window.dogwalk.roam;
+      const before = document.getElementById("btn-roam-lead").disabled;
+      for (let ty = 0; ty < w.rows; ty++) for (let tx = 0; tx < w.cols; tx++) {
+        if (!w.park[ty * w.cols + tx]) continue;
+        const mx = (tx + 0.5) * w.mpt, my = (ty + 0.5) * w.mpt;
+        if (s.blocked(mx, my)) continue;
+        r.x = mx; r.y = my; r.dog.x = mx; r.dog.y = my;
+        return { before, found: true };
+      }
+      return { before, found: false };
+    });
+    if (parked.found) {
+      await page.waitForTimeout(500);
+      check("the lead only comes off in a park",
+            parked.before === true &&
+            (await page.evaluate(() => document.getElementById("btn-roam-lead").disabled)) === false,
+            "outside: " + parked.before);
+      await page.click("#btn-roam-lead");
+      await page.waitForTimeout(600);
+      check("off the lead he ranges further", await page.evaluate(() =>
+        window.dogwalk.roam.offLead && !window.game.scene.getScene("world").leadGfx.commandBuffer.length));
+    }
+
+    // Ending up inside geometry must not trap you.
+    const escaped = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), w = s.worldRef, r = window.dogwalk.roam;
+      for (let ty = 0; ty < w.rows; ty++) for (let tx = 0; tx < w.cols; tx++) {
+        if (!w.solid[ty * w.cols + tx]) continue;
+        r.x = (tx + 0.5) * w.mpt; r.y = (ty + 0.5) * w.mpt;
+        return true;
+      }
+      return false;
+    });
+    if (escaped) {
+      await page.waitForTimeout(600);
+      check("you cannot get stuck inside a building", await page.evaluate(() => {
+        const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+        return !s.blocked(r.x, r.y);
+      }));
+    }
+
     // Ground you covered yourself counts as explored, and survives a reload.
     await page.click("#btn-roam-stop");
     await page.waitForTimeout(500);
@@ -374,6 +520,20 @@ async function waitForReady(page) {
       saved: JSON.parse(localStorage.getItem("dogwalk.roamed.v1") || "[]").length,
     }));
     check("finishing puts the map back", !after.on && after.barOff, JSON.stringify(after));
+
+    // And tells you how it went.
+    const card = await page.evaluate(() => ({
+      open: document.getElementById("roam-card").classList.contains("open"),
+      verdict: document.getElementById("card-verdict").textContent,
+      kpis: document.querySelectorAll("#card-kpis .kpi").length,
+      log: document.getElementById("card-log").textContent,
+    }));
+    check("the walk ends with a verdict", card.open && /\w/.test(card.verdict) &&
+          card.kpis >= 5 && /\w/.test(card.log), JSON.stringify(card));
+    await page.click("#btn-card-close");
+    await page.waitForTimeout(300);
+    check("the card closes", await page.evaluate(() =>
+      !document.getElementById("roam-card").classList.contains("open")));
     check("where you walked is remembered", after.roamed > 0 && after.saved === after.roamed,
           JSON.stringify(after));
 

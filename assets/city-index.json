@@ -2,6 +2,9 @@
   "_cols": 8,
   "_count": 66,
   "_size": 16,
+  "critters": {
+    "squirrel": 0
+  },
   "dashH": 3,
   "dashV": 4,
   "dirt": 20,

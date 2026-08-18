@@ -785,6 +785,62 @@ def walker(spec, frame):
     return sh
 
 
+SQUIRREL = [(74, 56, 38), (104, 78, 52), (134, 104, 72), (162, 132, 96), (196, 170, 132)]
+
+
+def squirrel(frame):
+    """A grey squirrel from above, facing east: a small body and an enormous
+    tail, which is the whole silhouette at this size — nobody would read the
+    body alone, but everyone reads the tail.
+
+    Four frames of a bounding run, since a squirrel does not walk. The body
+    stretches and gathers and the tail whips over behind it.
+    """
+    im = Image.new("RGBA", (WT, WT), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    s = SQUIRREL
+
+    def r(x0, y0, x1, y1, c):
+        d.rectangle([max(0, x0), max(0, y0), min(WT - 1, x1), min(WT - 1, y1)], fill=c)
+
+    stretch = [0, 1, 2, 1][frame % 4]       # gathered, mid, extended, mid
+    lift = [1, 0, -1, 0][frame % 4]         # tail whipping over
+
+    # Tail first, and big: a broad curl sweeping west and up over the back,
+    # roughly as much of the sprite as the animal is. It is drawn in the light
+    # end of the ramp so it separates from the darker body in front of it.
+    ty = 8 + lift
+    r(4, ty - 4, 7, ty - 2, s[3])           # the curl coming over the back
+    r(3, ty - 3, 5, ty + 1, s[3])           # the fat of it, trailing west
+    r(4, ty - 4, 7, ty - 4, s[4])           # lit crown of the curl
+    r(2, ty - 2, 3, ty, s[2])               # the tip, curling under
+    r(4, ty + 1, 6, ty + 1, s[1])           # underside, in shadow
+
+    # Body: compact, gathering and extending as it bounds.
+    r(6, 6, 9 + stretch, 9, s[1])
+    r(7, 6, 9 + stretch, 6, s[2])           # lit along the north flank
+    r(6, 9, 9 + stretch, 9, s[0])           # shadow along the south
+
+    # Head and one dark eye.
+    r(10 + stretch, 6, 12 + stretch, 9, s[2])
+    r(10 + stretch, 6, 12 + stretch, 6, s[3])
+    im.putpixel((min(WT - 1, 12 + stretch), 8), (26, 22, 18, 255))
+    r(10 + stretch, 5, 11 + stretch, 5, s[2])   # ear
+
+    solid = [[im.getpixel((x, y))[3] >= 128 for y in range(WT)] for x in range(WT)]
+    for y in range(WT):
+        for x in range(WT):
+            if solid[x][y]:
+                continue
+            if (x > 0 and solid[x - 1][y]) or (y > 0 and solid[x][y - 1]):
+                im.putpixel((x, y), (28, 24, 20, 180))
+    return im
+
+
+def build_critters():
+    return [squirrel(f) for f in range(4)]
+
+
 def build_people():
     frames, index = [], {}
     for spec in WALKERS:
@@ -885,6 +941,13 @@ def build():
         plsheet.paste(im, (i * WT, 0))
     plsheet.save(os.path.join(here, "assets", "people.png"))
     index["people"] = plindex
+
+    critters = build_critters()
+    csheet = Image.new("RGBA", (len(critters) * WT, WT), (0, 0, 0, 0))
+    for i, im in enumerate(critters):
+        csheet.paste(im, (i * WT, 0))
+    csheet.save(os.path.join(here, "assets", "critters.png"))
+    index["critters"] = {"squirrel": 0}
 
     index["_count"] = len(tiles)
     index["_cols"] = COLS

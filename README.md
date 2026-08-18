@@ -141,7 +141,8 @@ already watched is close to instant.
 walk the real streets yourself, with the dog following you rather than the other
 way round.
 
-`WASD` or the arrow keys, shift to jog, Escape to finish. On a phone a drag is a
+`WASD` or the arrow keys, shift to jog, space to grip the lead, `E` to let him
+off it, Escape to finish. On a phone a drag is a
 thumbstick that anchors wherever you put your thumb down, rather than panning
 the camera — panning away from yourself mid-walk is not something you want, and
 a stick parked in a corner is not something you can reach.
@@ -159,6 +160,46 @@ where you walked, which keeps him out of the hedges and takes him round corners
 instead of through them. He trails about three and a half metres back, hurries
 when he has dropped behind and ambles when he is close, and when you stand still
 for a couple of seconds he goes off and has a sniff at something nearby.
+
+#### The lead
+
+The game is the lead. A real dog walk is a negotiation between two wills: he
+wants to go left and inspect something appalling, you want to get on. The lead
+is where those two meet, so it is drawn between you and it is the only readout
+that matters — sagging and leather-brown when he is getting his way, straight
+and red when he is not.
+
+He wants things, and the things are real: the lamp posts, bins, postboxes and
+benches are the street furniture where it actually went, the trees are the
+trees, and the named shops and churches are straight off the OSM tags. Walk him
+near one and he makes for it. Let him have it and he gets a proper go at it and
+the walk gets better. Keep walking and the lead comes taut — he is held on the
+arc at full stretch, straining in the right direction — and after about three
+seconds he gives it up, which costs you both a little.
+
+Those wants are thinned to one every eight metres or so, named places first.
+Every tree in the town is about nineteen thousand of them, which means he wants
+something at every single step, the lead is permanently taut, and the choice you
+are supposed to be making stops being a choice. Thinned out, a walk gets a
+rhythm: a stretch of plain walking, then something worth stopping for.
+
+**Squirrels.** Every half-minute or so one bolts past. He is after it instantly
+and you have about a second to grip the lead — hold space, or the button that
+appears. Grip it and he strains but stays. Miss it and he slips the lead and is
+gone, and you have to call him back before you can clip him on again. Either way
+he loved it; missing it is funnier, not worse.
+
+**Off the lead.** Only in a park, which is the actual rule. Off it he ranges
+much further, goes for things he could never reach on the lead, and earns by the
+ground he covers rather than by the clock — paying by the second would mean
+standing still in a park scored as well as a good run about. Wander off the park
+with him still loose and the bar tells you to clip him back on.
+
+**Afterwards** you get a verdict, rated on how good a walk it was for *him* —
+joy per hundred metres, not distance, because the question is not how far you
+went but whether he got anything out of it. The top verdicts carry a minimum
+distance of their own: one squirrel forty metres from the front door is not the
+best day of his life, however well it scores per metre.
 
 The bar reads out how far you have walked and where you are, off the same OSM
 names the map is lettered with — "outside the library" if you are next to a
@@ -325,6 +366,9 @@ siding), and one felted flat roof for shops and flats. The flat one is drawn as
 its own thing rather than slates in grey, because that is the whole point of it:
 a bitumen membrane in overlapping strips, ponding where it never lies flat, the
 odd rooflight, and a coping-stone parapet where it ends.
+
+The squirrel is mostly tail, because from directly above that is the whole
+silhouette — nobody reads the body of a squirrel, everybody reads the tail.
 
 The two walkers are drawn facing east and rotated to their heading at runtime,
 exactly as the dog is — one four-frame cycle covers every direction, and it
