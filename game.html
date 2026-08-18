@@ -242,6 +242,18 @@
   #roam-panel h3 { margin: 0 0 6px; font-size: 18px; }
   #roam-panel p { margin: 0 0 14px; font-size: 13px; opacity: 0.75; line-height: 1.45; }
   #roam-panel .row { display: flex; gap: 8px; margin-top: 16px; }
+  #data-panel h3.sub {
+    margin: 22px 0 6px; font-size: 15px;
+    border-top: 1px solid var(--panel-edge); padding-top: 16px;
+  }
+  #place-input {
+    flex: 1; min-width: 140px; background: rgba(255,255,255,0.05);
+    border: 2px solid var(--panel-edge); border-radius: 8px; padding: 8px 10px;
+    color: var(--ink); font: inherit; font-size: 15px; text-transform: uppercase;
+  }
+  #place-msg { font-size: 13px; margin-top: 8px; min-height: 18px; opacity: 0.8; }
+  #walk-list .empty { font-size: 12px; opacity: 0.6; padding: 8px 4px; line-height: 1.5; }
+
   #roam-panel h4 {
     margin: 18px 0 8px; font-size: 13px; text-transform: uppercase;
     letter-spacing: 0.06em; opacity: 0.55; font-weight: 700;
@@ -539,6 +551,16 @@
       <button class="btn" id="btn-close-data" style="margin-left:auto">Close</button>
     </div>
     <div id="data-msg"></div>
+
+    <h3 class="sub">Or just walk your own streets</h3>
+    <p>No tracker, no data — put in a postcode and it builds the same size of
+       world there, about a kilometre square, from the real map. Then press
+       Roam.</p>
+    <div class="row">
+      <input type="text" id="place-input" placeholder="e.g. G46 6QE" maxlength="60">
+      <button class="btn primary" id="btn-place">Take me there</button>
+    </div>
+    <div id="place-msg"></div>
   </div>
 </div>
 
@@ -603,7 +625,7 @@
   var state = {
     points: [], walks: [], bounds: null, territory: null, grid: null, activeWalk: -1, wx: null,
     stops: [], roamed: [],
-    osmWays: null, dogName: "Your Dog",
+    osmWays: null, dogName: "Your Dog", placeLabel: null,
     dogType: "labrador", dogCoat: "black", dogCollar: "green"
   };
 
@@ -783,6 +805,7 @@
   // that are, by definition, all away from it.
   function buildFromPoints(points, presplit) {
     if (!points.length) return;
+    state.placeLabel = null;      // real walks win over a place you looked up
     state.points = points.slice().sort(function (a, b) { return new Date(a.t) - new Date(b.t); });
     state.walks = presplit && presplit.length ? presplit : splitIntoWalks(state.points);
     // The world is built around ONE walk, not around every walk ever recorded.
@@ -813,6 +836,115 @@
     state.grid = grid;
     state.stops = allStops();
     updateStats();
+  }
+
+  // ---- somewhere to walk, with no data at all ----
+  // You do not need a GPS collar to walk round your own streets. Give it a
+  // postcode and it builds the same size of world anywhere.
+  //
+  // Sized to come out exactly as a bundled walk does: 800 x 600m of bounds,
+  // which the 140m margin on each side turns into an 1080 x 880m world of
+  // 541 x 441 tiles at two metres each. Two metres a tile is what makes a house
+  // look like a house — any bigger and the tile budget forces a coarser grid.
+  //
+  // Deliberately not snapped to the 200m grid that walks use. Snapping is there
+  // so several walks round the same streets share one built world; a postcode
+  // is a fixed point that already gives identical bounds every time, and
+  // snapping an arbitrary centre outward would swell the box by up to 200m an
+  // axis and push the tile count past its cap, which drops it to 2.9m a tile.
+  var PLACE_SPAN_M = 800, PLACE_SPAN_LAT_M = 600;
+  var UK_POSTCODE = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d?[A-Z]{0,2}$/i;
+
+  function boundsAround(lat, lng) {
+    var mPerDegLng = 111320 * Math.cos(lat * Math.PI / 180);
+    var halfLat = PLACE_SPAN_LAT_M / 2, halfLng = PLACE_SPAN_M / 2;
+    return { minLat: lat - halfLat / 111320, maxLat: lat + halfLat / 111320,
+             minLng: lng - halfLng / mPerDegLng, maxLng: lng + halfLng / mPerDegLng };
+  }
+
+  // postcodes.io for UK postcodes — free, keyless, and built for exactly this.
+  // Nominatim for everything else, which covers place names and the rest of the
+  // world at the cost of being slower and vaguer.
+  function geocode(query) {
+    var q = (query || "").trim();
+    if (!q) return Promise.resolve(null);
+    var timed = function (url) {
+      var ctl = new AbortController();
+      var timer = setTimeout(function () { ctl.abort(); }, 12000);
+      return fetch(url, { signal: ctl.signal })
+        .then(function (r) { clearTimeout(timer); return r.ok ? r.json() : null; })
+        .catch(function () { clearTimeout(timer); return null; });
+    };
+
+    var uk = UK_POSTCODE.test(q.replace(/\s+/g, " "))
+      ? timed("https://api.postcodes.io/postcodes/" + encodeURIComponent(q))
+          .then(function (d) {
+            if (d && d.status === 200 && d.result) {
+              return { lat: d.result.latitude, lng: d.result.longitude,
+                       label: d.result.postcode + ", " +
+                              (d.result.admin_ward || d.result.admin_district || "") };
+            }
+            // A partial like "G46" is an outcode, not a postcode.
+            var out = q.replace(/\s+/g, "").toUpperCase();
+            return timed("https://api.postcodes.io/outcodes/" + encodeURIComponent(out))
+              .then(function (o) {
+                if (o && o.status === 200 && o.result) {
+                  return { lat: o.result.latitude, lng: o.result.longitude,
+                           label: o.result.outcode + ", " +
+                                  ((o.result.admin_district || [])[0] || "") };
+                }
+                return null;
+              });
+          })
+      : Promise.resolve(null);
+
+    return uk.then(function (hit) {
+      if (hit) return hit;
+      return timed("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
+                   encodeURIComponent(q)).then(function (d) {
+        if (d && d.length) {
+          return { lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon),
+                   label: (d[0].display_name || q).split(",").slice(0, 3).join(",") };
+        }
+        return null;
+      });
+    });
+  }
+
+  // Set up a world around a point with no walk data behind it. Everything the
+  // rest of the game reads off `state` still has to exist — an empty walk list
+  // and a territory to measure "explored" against.
+  function usefulPlace(lat, lng, label) {
+    state.points = [];
+    state.walks = [];
+    state.stops = [];
+    state.wx = null;
+    state.activeWalk = -1;
+    state.placeLabel = label || null;
+    state.bounds = boundsAround(lat, lng);
+    state.territory = boundsAround(lat, lng);
+
+    var grid = [];
+    for (var r = 0; r < GRID_ROWS; r++) {
+      var row = [];
+      for (var c = 0; c < GRID_COLS; c++) row.push({ explored: false, treasure: null });
+      grid.push(row);
+    }
+    state.grid = grid;
+
+    // A patch of ground already lit around where you are standing. Without it
+    // the first thing you see is a wholly dark map, which reads as broken
+    // rather than as unexplored.
+    var mPerDegLng = 111320 * Math.cos(lat * Math.PI / 180);
+    for (var a = 0; a < 12; a++) {
+      for (var ring = 0; ring <= 2; ring++) {
+        var th = a * Math.PI / 6, d = ring * 26;
+        rememberRoamed({ lat: lat + Math.sin(th) * d / 111320,
+                         lng: lng + Math.cos(th) * d / mPerDegLng });
+      }
+    }
+    updateStats();
+    renderWalkList();
   }
 
   // ---- Overpass ----
@@ -2948,7 +3080,12 @@
       this.dogGfx.clear();
       this.dog.setDepth(100000);
 
-      var home = w.toM(state.points[0].lat, state.points[0].lng);
+      // Where he waits before you pick a walk. With no walk data at all — a
+      // world built from a postcode — there is no first fix to stand him on,
+      // so he waits in the middle of it.
+      var home = state.points.length
+        ? w.toM(state.points[0].lat, state.points[0].lng)
+        : { x: w.widthM / 2, y: w.heightM / 2 };
       this.dog.setPosition(home.x * scale, home.y * scale);
 
       var cam = this.cameras.main;
@@ -2982,7 +3119,9 @@
       if (this.liveGfx) this.liveGfx.clear();
       if (this.dogGfx) this.dogGfx.clear();
 
-      var home = w.toM(state.points[0].lat, state.points[0].lng);
+      var home = state.points.length
+        ? w.toM(state.points[0].lat, state.points[0].lng)
+        : { x: w.widthM / 2, y: w.heightM / 2 };
       if (this.dog) this.dog.setPosition(home.x * scale, home.y * scale);
     }
 
@@ -4155,11 +4294,25 @@
     return idx;
   }
 
+  // Place names come back from a geocoder, so they are somebody else's text.
+  function escapeHtml(t) {
+    return String(t).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
   function renderWalkList() {
     var el = document.getElementById("walk-list");
     el.innerHTML = "";
     var wet = document.querySelector('#walk-sort .chip[data-sort="wettest"]');
     if (wet) wet.style.display = state.wx ? "" : "none";
+    document.getElementById("walk-sort").style.display = state.walks.length ? "" : "none";
+    if (!state.walks.length) {
+      el.innerHTML = '<div class="empty">No walks here — this is ' +
+        (state.placeLabel ? escapeHtml(state.placeLabel) : "a map") +
+        ', built from the real streets. Press <b>Roam</b> to go for a walk.</div>';
+      return;
+    }
     walkOrder().forEach(function (i) {
       var walk = state.walks[i];
       var mins = Math.round((new Date(walk[walk.length - 1].t) - new Date(walk[0].t)) / 60000);
@@ -5119,6 +5272,48 @@
 
   document.getElementById("btn-card-close").addEventListener("click", function () {
     document.getElementById("roam-card").classList.remove("open");
+  });
+
+  // Take me there: geocode, build a world of the standard size around it, and
+  // hand it over. No walk data involved at any point.
+  function goToPlace() {
+    var input = document.getElementById("place-input");
+    var msg = document.getElementById("place-msg");
+    var q = input.value.trim();
+    if (!q) { msg.textContent = "Put in a postcode first."; return; }
+    var btn = document.getElementById("btn-place");
+    btn.disabled = true;
+    msg.textContent = "Looking that up\u2026";
+    geocode(q).then(function (hit) {
+      if (!hit || !isFinite(hit.lat) || !isFinite(hit.lng)) {
+        msg.textContent = "Could not find that one. A UK postcode works best.";
+        btn.disabled = false;
+        return;
+      }
+      msg.textContent = "Building " + hit.label;
+      if (roam.on) stopRoam();
+      if (pb.walk) stopWalk();
+      usefulPlace(hit.lat, hit.lng, hit.label);
+      routeCache = {}; walkGraph = null; walkGraphKey = null;
+      document.getElementById("data-panel").classList.remove("open");
+      showLoader("Building " + hit.label);
+      return rebuildFromData().then(function () {
+        hideLoader();
+        btn.disabled = false;
+        msg.textContent = "";
+        toast(hit.label + " \u2014 press Roam to go for a walk");
+      });
+    }).catch(function (e) {
+      hideLoader();
+      msg.textContent = "That lookup failed. Try again in a moment.";
+      if (window.console) console.error("place lookup", e);
+      btn.disabled = false;
+    });
+  }
+
+  document.getElementById("btn-place").addEventListener("click", goToPlace);
+  document.getElementById("place-input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); goToPlace(); }
   });
 
   document.getElementById("btn-roam").addEventListener("click", function () {

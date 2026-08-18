@@ -23,6 +23,31 @@ Keyboard: space plays and pauses, left/right scrub, up/down change speed,
 `+`/`-` zoom, Escape stops. While roaming the arrow keys walk you about instead
 — see below.
 
+### No dog data? Put in a postcode
+
+You do not need a GPS collar to walk round your own streets. "Load data" takes
+a postcode and builds the same size of world anywhere from the real map, with no
+walk data behind it at all — then press Roam.
+
+UK postcodes go through [postcodes.io](https://postcodes.io/), which is free,
+keyless and built for exactly this; anything else falls through to
+[Nominatim](https://nominatim.openstreetmap.org/), which covers place names and
+the rest of the world more slowly and more vaguely.
+
+The world it builds is deliberately the same as one built from a walk: 800 x
+600m of bounds, which the 140m margin on each side turns into 1080 x 880m of
+541 x 441 tiles at two metres each. Two metres a tile is what makes a house look
+like a house — any bigger and the tile cap forces a coarser grid, and at 2.9m a
+tile the street scene starts to go. Unlike a walk's bounds these are not snapped
+to the 200m grid: snapping is there so several walks round the same streets
+share one built world, but a postcode is a fixed point that gives identical
+bounds every time anyway, and snapping an arbitrary centre outward swelled the
+box by up to 200m an axis and pushed it straight past the cap.
+
+A patch of ground around where you are put down starts already lit, because the
+first thing you see being a wholly dark map reads as broken rather than as
+unexplored. The rest is yours to walk into.
+
 Expected data shape — an array of GPS points:
 
 ```json

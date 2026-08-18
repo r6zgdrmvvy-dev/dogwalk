@@ -666,6 +666,81 @@ async function waitForReady(page) {
     check("where you walked is remembered", after.roamed > 0 && after.saved === after.roamed,
           JSON.stringify(after));
 
+    // Somewhere to walk with no data at all. The geocoders are stubbed with
+    // their real response shapes — this runs offline, and postcodes.io is a
+    // third party we should not be hammering from a test.
+    await page.route("https://api.postcodes.io/**", (r) => {
+      const u = r.request().url();
+      if (/G46/.test(u)) {
+        return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          status: 200, result: { postcode: "G46 6QE", latitude: 55.796151,
+            longitude: -4.292285, admin_ward: "Giffnock and Thornliebank" } }) });
+      }
+      return r.fulfill({ status: 404, contentType: "application/json",
+                         body: JSON.stringify({ status: 404, error: "Postcode not found" }) });
+    });
+    await page.route("https://nominatim.openstreetmap.org/**", (r) =>
+      r.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+
+    await page.click("#btn-data");
+    await page.waitForTimeout(300);
+    await page.fill("#place-input", "G46 6QE");
+    await page.click("#btn-place");
+    await page.waitForFunction(
+      () => window.dogwalk.state.placeLabel && window.__world &&
+            !document.getElementById("data-panel").classList.contains("open"),
+      null, { timeout: 45000 });
+    await page.waitForTimeout(1500);
+    const place = await page.evaluate(() => {
+      const w = window.__world, st = window.dogwalk.state;
+      return { widthM: Math.round(w.widthM), heightM: Math.round(w.heightM),
+               mpt: +w.mpt.toFixed(2), tiles: w.cols * w.rows,
+               walks: st.walks.length, label: st.placeLabel,
+               lat: +((st.bounds.minLat + st.bounds.maxLat) / 2).toFixed(3),
+               lng: +((st.bounds.minLng + st.bounds.maxLng) / 2).toFixed(3),
+               lit: (() => { let n = 0; for (const v of w.seen) if (v) n++; return n; })(),
+               empty: !!document.querySelector("#walk-list .empty") };
+    });
+    // Deliberately the same size as a world built from a walk: 1080 x 880m at
+    // two metres a tile. Any bigger and the tile cap forces a coarser grid.
+    check("a postcode builds the same size of world",
+          place.widthM === 1080 && place.heightM === 880 && place.mpt === 2,
+          JSON.stringify({ w: place.widthM, h: place.heightM, mpt: place.mpt,
+                           tiles: place.tiles }));
+    check("it lands on the right spot",
+          Math.abs(place.lat - 55.796) < 0.01 && Math.abs(place.lng + 4.292) < 0.01,
+          place.lat + ", " + place.lng);
+    check("the walk list says there are none", place.walks === 0 && place.empty,
+          JSON.stringify({ walks: place.walks, empty: place.empty }));
+    check("some ground is already lit to stand on", place.lit > 0, place.lit);
+
+    // Roaming is the whole point of a place with no walks in it.
+    await page.click("#btn-roam");
+    await page.waitForTimeout(300);
+    await page.click("#btn-roam-go");
+    await page.waitForTimeout(1500);
+    const noData = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      return { on: r.on, inWall: s.blocked(r.x, r.y), interests: r.interests.length,
+               where: document.getElementById("roam-where").textContent };
+    });
+    check("you can roam with no walk data at all",
+          noData.on && !noData.inWall && noData.interests > 0, JSON.stringify(noData));
+    await page.click("#btn-roam-stop");
+    await page.waitForTimeout(400);
+    await page.click("#btn-card-close").catch(() => {});
+
+    // A postcode nobody has heard of says so rather than hanging.
+    await page.click("#btn-data");
+    await page.waitForTimeout(300);
+    await page.fill("#place-input", "ZZ99 9ZZ");
+    await page.click("#btn-place");
+    await page.waitForFunction(
+      () => !document.getElementById("btn-place").disabled, null, { timeout: 45000 });
+    check("an unknown postcode is reported, not swallowed", await page.evaluate(() =>
+      /find/i.test(document.getElementById("place-msg").textContent)),
+      await page.evaluate(() => document.getElementById("place-msg").textContent));
+
     check("no page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
     await page.close();
 
