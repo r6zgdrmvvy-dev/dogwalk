@@ -508,12 +508,20 @@ async function waitForReady(page) {
     }), await page.evaluate(() => JSON.stringify({
       off: window.dogwalk.roam.offLead, recalling: window.dogwalk.roam.recalling })));
 
-    // Off the lead is a park thing.
+    // Off the lead is a park thing. Stand somewhere that is definitely not a
+    // park first, or the "before" reading depends on where you happen to be.
     await page.evaluate(() => {
-      const r = window.dogwalk.roam;
+      const s = window.game.scene.getScene("world"), w = s.worldRef, r = window.dogwalk.roam;
       r.offLead = false; r.recalling = false; r.warn = "";
+      for (let ty = 0; ty < w.rows; ty++) for (let tx = 0; tx < w.cols; tx++) {
+        if (w.park[ty * w.cols + tx]) continue;
+        const mx = (tx + 0.5) * w.mpt, my = (ty + 0.5) * w.mpt;
+        if (s.blocked(mx, my) || !s.onFootpath(mx, my)) continue;
+        r.x = mx; r.y = my; r.dog.x = mx; r.dog.y = my;
+        return;
+      }
     });
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(600);
     const parked = await page.evaluate(() => {
       const s = window.game.scene.getScene("world"), w = s.worldRef, r = window.dogwalk.roam;
       const before = document.getElementById("btn-roam-lead").disabled;
@@ -537,6 +545,79 @@ async function waitForReady(page) {
       check("off the lead he ranges further", await page.evaluate(() =>
         window.dogwalk.roam.offLead && !window.game.scene.getScene("world").leadGfx.commandBuffer.length));
     }
+
+    // Other people, out walking their own dogs. A street with nobody on it is
+    // a map rather than a place.
+    await page.evaluate(() => { window.dogwalk.roam.nextNpc = 0; });
+    await page.waitForTimeout(9000);
+    const street = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      return { n: r.npcs.length,
+               onPath: r.npcs.filter((x) => s.onFootpath(x.x, x.y)).length,
+               sprites: r.npcs.filter((x) => x.spr && x.spr.owner.visible).length,
+               dists: r.npcs.map((x) => Math.round(Math.hypot(x.x - r.x, x.y - r.y))) };
+    });
+    check("other walkers turn up", street.n > 0, JSON.stringify(street));
+    check("they walk on the pavement, not the road", street.onPath === street.n,
+          street.onPath + " of " + street.n);
+    check("each has an owner, a dog and a collar", street.sprites === street.n);
+
+    // Two dogs nose to nose: a greeting only counts while they are together
+    // and you are not hauling him off.
+    const beside = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      let n = r.npcs.find((x) => x.temper !== "shy" && !x.met);
+      if (!n) { n = s.spawnNpc(); if (n) { n.temper = "friendly"; n.met = false; } }
+      if (!n) return null;
+      n.x = r.x + 2; n.y = r.y;
+      n.dog.x = r.dog.x + 1.5; n.dog.y = r.dog.y;
+      return { name: n.name, temper: n.temper };
+    });
+    if (beside) {
+      await page.waitForTimeout(1000);
+      check("the dogs get talking", await page.evaluate(() => !!window.dogwalk.roam.greet),
+            JSON.stringify(await page.evaluate(() => ({
+              greet: !!window.dogwalk.roam.greet,
+              forS: +window.dogwalk.roam.greetFor.toFixed(1) }))));
+      await page.waitForTimeout(4500);
+      const met = await page.evaluate(() => ({
+        met: window.dogwalk.roam.met, joy: window.dogwalk.roam.joy }));
+      check("saying hello is worth having", met.met.length > 0 && met.joy > 0,
+            JSON.stringify(met));
+    }
+
+    // A nervous dog's owner gives you a wide berth and says why.
+    const shy = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      let n = r.npcs.find((x) => x.temper === "shy");
+      if (!n) { n = s.spawnNpc(); if (!n) return null; n.temper = "shy"; }
+      n.said = 0; n.met = false;
+      n.x = r.x + 5; n.y = r.y; n.dog.x = n.x - 2; n.dog.y = n.y;
+      return true;
+    });
+    if (shy) {
+      await page.waitForTimeout(2000);
+      const after = await page.evaluate(() => {
+        const r = window.dogwalk.roam;
+        const n = r.npcs.find((x) => x.temper === "shy");
+        return n ? { said: n.said, met: n.met } : null;
+      });
+      check("a nervous dog is not made to say hello",
+            after && after.said === 1 && !after.met, JSON.stringify(after));
+    }
+
+    // Walk away and they are put back in the pool rather than piling up.
+    await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      r.x += 400; r.y += 400; r.dog.x = r.x; r.dog.y = r.y;
+    });
+    await page.waitForTimeout(2000);
+    const recycled = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      return { left: r.npcs.length, pooled: (s.npcPool || []).length };
+    });
+    check("leaving them behind recycles them", recycled.pooled > 0,
+          JSON.stringify(recycled));
 
     // Ending up inside geometry must not trap you.
     const escaped = await page.evaluate(() => {
@@ -575,7 +656,9 @@ async function waitForReady(page) {
       log: document.getElementById("card-log").textContent,
     }));
     check("the walk ends with a verdict", card.open && /\w/.test(card.verdict) &&
-          card.kpis >= 5 && /\w/.test(card.log), JSON.stringify(card));
+          card.kpis >= 6 && /\w/.test(card.log), JSON.stringify(card));
+    check("the verdict counts the dogs he met", /dogs? met/.test(
+      await page.evaluate(() => document.getElementById("card-kpis").textContent)));
     await page.click("#btn-card-close");
     await page.waitForTimeout(300);
     check("the card closes", await page.evaluate(() =>

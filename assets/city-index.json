@@ -41,7 +41,11 @@
   "paveB": 10,
   "people": {
     "her": 0,
-    "him": 4
+    "him": 4,
+    "npc1": 8,
+    "npc2": 12,
+    "npc3": 16,
+    "npc4": 20
   },
   "props": {
     "bench": 11,

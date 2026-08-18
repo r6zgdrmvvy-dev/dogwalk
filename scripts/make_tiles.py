@@ -700,6 +700,25 @@ WALKERS = [
      "hair": [(38, 32, 28), (58, 50, 44), (82, 72, 64)],
      "coat": [(38, 62, 88), (54, 84, 116), (78, 112, 148)],
      "skin": (222, 180, 146), "long": False},
+    # The rest are other people, out walking their own dogs. Same drawing, a
+    # different coat and head — two figures repeated down a street reads as a
+    # bug rather than as a neighbourhood.
+    {"key": "npc1",
+     "hair": [(48, 44, 40), (68, 62, 56), (92, 84, 76)],
+     "coat": [(46, 66, 50), (64, 92, 68), (88, 122, 92)],
+     "skin": (176, 130, 96), "long": True},
+    {"key": "npc2",
+     "hair": [(96, 88, 78), (132, 124, 112), (170, 162, 150)],
+     "coat": [(58, 52, 62), (80, 72, 86), (108, 98, 116)],
+     "skin": (238, 202, 170), "long": False},
+    {"key": "npc3",
+     "hair": [(28, 24, 22), (44, 38, 34), (64, 56, 50)],
+     "coat": [(112, 70, 34), (146, 96, 48), (180, 128, 70)],
+     "skin": (150, 108, 78), "long": True},
+    {"key": "npc4",
+     "hair": [(78, 46, 26), (108, 68, 38), (140, 96, 56)],
+     "coat": [(62, 62, 66), (86, 86, 92), (114, 114, 122)],
+     "skin": (228, 190, 158), "long": False},
 ]
 
 

@@ -208,6 +208,20 @@ appears. Grip it and he strains but stays. Miss it and he slips the lead and is
 gone, and you have to call him back before you can clip him on again. Either way
 he loved it; missing it is funnier, not worse.
 
+**Other dogs.** Other people are out walking theirs. They spawn on the real
+pavements within about ninety metres of you, amble along them — straight on
+where that works, otherwise whichever turn does, which is enough to send them
+round corners and along the fronts of the houses without a graph to follow —
+and are recycled when you leave them behind. Each has a randomly chosen owner,
+breed, coat, collar, name and temperament.
+
+Bring your dog close to theirs and the two of them stop for a sniff while the
+owner says something. The lead still applies: the greeting only counts while
+they are actually together and you are not hauling him off, so marching straight
+past means he does not get to say hello. Nervous dogs are a real thing, so a shy
+one's owner gives you a wide berth and says why, and their dog is never made to
+greet yours.
+
 **Off the lead.** Only in a park, which is the actual rule. Off it he ranges
 much further, goes for things he could never reach on the lead, and earns by the
 ground he covers rather than by the clock — paying by the second would mean
@@ -388,6 +402,12 @@ odd rooflight, and a coping-stone parapet where it ends.
 
 The squirrel is mostly tail, because from directly above that is the whole
 silhouette — nobody reads the body of a squirrel, everybody reads the tail.
+
+Dogs are five builds and six coats, and what tells two breeds apart at sixteen
+pixels is the proportion between body, head and tail plus what the ears are
+doing. There are four more walkers beyond the two you can play as, for the
+people you meet: two figures repeated down a street reads as a bug rather than
+as a neighbourhood.
 
 The two walkers are drawn facing east and rotated to their heading at runtime,
 exactly as the dog is — one four-frame cycle covers every direction, and it

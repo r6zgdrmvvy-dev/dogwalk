@@ -2306,6 +2306,30 @@
 
   // What he finds worth stopping for, and how much of a treat each one is.
   var SNIFF_JOY = { lamp: 6, bin: 9, postbox: 7, bench: 5, tree: 6, place: 13 };
+
+  // Other people, out walking their own dogs. Meeting one is the most social
+  // thing that happens on a walk, and a street with nobody on it is a map
+  // rather than a place.
+  var NPC_LOOKS = [8, 12, 16, 20];           // walker frames that are not you
+  var NPC_MAX = 5;                           // on the streets at once
+  var NPC_NEAR_M = 95;                       // spawn within, despawn beyond
+  var NPC_SPEED = [1.1, 1.9];                // they amble; you can catch them up
+  var GREET_M = 2.7;                         // nose to nose
+  var GREET_SECONDS = 2.8;
+  var GREET_JOY = { friendly: 20, bouncy: 16, shy: 4 };
+
+  var NPC_DOG_NAMES = [
+    "Poppy", "Milo", "Bear", "Nessie", "Rufus", "Hamish", "Luna", "Bramble",
+    "Skye", "Ziggy", "Maisie", "Ollie", "Dougal", "Pepper", "Rowan", "Tilly"
+  ];
+  var NPC_LINES = {
+    friendly: ["She's very friendly!", "Aw, look at those two.",
+               "He's a big softie, honestly.", "On you go, say hello."],
+    bouncy:   ["Down! Sorry — he's a bit much.", "She's still a pup, sorry!",
+               "He's got no manners at all."],
+    shy:      ["Sorry, she's a bit nervous.", "We'll go round, he's not keen.",
+               "Best give us a bit of room."]
+  };
   var SNIFF_LABEL = { lamp: "lamp post", bin: "the bin", postbox: "postbox",
                       bench: "bench", tree: "tree" };
 
@@ -2318,6 +2342,7 @@
            want: null, sniffFor: 0, strainFor: 0 },
     joy: 0, tension: 0, offLead: false, offLeadFor: 0, recalling: false,
     sniffed: [], places: {}, held: 0, slipped: 0, refused: 0,
+    npcs: [], nextNpc: 2, met: [], greet: null, greetFor: 0,
     squirrel: null, nextSquirrel: 30, gripping: false,
     interests: null, buckets: null, warn: "",
     keys: {},                                // held keys, by direction
@@ -3272,6 +3297,9 @@
 
     endRoam() {
       roam.on = false;
+      roam.npcs.forEach(function (n) { hideNpc(n); });
+      roam.npcs = [];
+      roam.greet = null;
       if (this.walker) this.walker.setVisible(false);
       if (this.critter) this.critter.setVisible(false);
       if (this.leadGfx) this.leadGfx.clear();
@@ -3358,6 +3386,7 @@
       this.walker.setRotation(Math.atan2(roam.hy, roam.hx));
 
       this.updateSquirrel(total, scale);
+      this.updateNpcs(total, scale);
       this.updateRoamDog(total, scale);
       this.drawLead(scale);
 
@@ -3399,6 +3428,15 @@
 
       if (roam.squirrel) return { x: roam.squirrel.x, y: roam.squirrel.y, urgent: true };
       if (roam.recalling) { d.want = null; return { x: roam.x, y: roam.y, urgent: true }; }
+      // Another dog beats a lamp post every time. He stops a nose short of
+      // them rather than walking into them — two dogs drawn on top of each
+      // other is one dog.
+      if (roam.greet) {
+        d.want = null;
+        var g = roam.greet.dog;
+        var ax = d.x - g.x, ay = d.y - g.y, ad = Math.hypot(ax, ay) || 1;
+        return { x: g.x + ax / ad * 1.3, y: g.y + ay / ad * 1.3, urgent: false };
+      }
 
       // Has he still got something in mind, and is it still worth having?
       if (d.want && (d.want.done || d.want.cool > 0)) d.want = null;
@@ -3559,6 +3597,170 @@
       return !!w.park[ty * w.cols + tx];
     }
 
+    // ---------- other people, out walking their own dogs ----------
+
+    // Ground somebody would actually walk on: the pavement and the footpaths.
+    // Not the carriageway — an NPC strolling down the middle of the road looks
+    // like a bug, even though you are allowed to.
+    onFootpath(mx, my) {
+      var w = this.worldRef;
+      if (!w) return false;
+      var tx = Math.floor(mx / w.mpt), ty = Math.floor(my / w.mpt);
+      if (tx < 0 || ty < 0 || tx >= w.cols || ty >= w.rows) return false;
+      var k = w.kind[ty * w.cols + tx];
+      return (k === 2 || k === 6) && !this.propAt(mx, my, 0.5, true);
+    }
+
+    spawnNpc() {
+      var w = this.worldRef;
+      // Somewhere on the pavement, near enough to walk into but not on top of
+      // you — appearing out of thin air in front of somebody is worse than not
+      // appearing at all.
+      for (var tries = 0; tries < 90; tries++) {
+        var th = Math.random() * Math.PI * 2;
+        var r = 34 + Math.random() * (NPC_NEAR_M - 40);
+        var x = roam.x + Math.cos(th) * r, y = roam.y + Math.sin(th) * r;
+        if (!this.onFootpath(x, y)) continue;
+        var temper = Math.random() < 0.6 ? "friendly" : (Math.random() < 0.6 ? "bouncy" : "shy");
+        var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+        var d0 = dirs[Math.floor(Math.random() * 4)];
+        var n = {
+          x: x, y: y, hx: d0[0], hy: d0[1],
+          speed: NPC_SPEED[0] + Math.random() * (NPC_SPEED[1] - NPC_SPEED[0]),
+          look: NPC_LOOKS[Math.floor(Math.random() * NPC_LOOKS.length)],
+          temper: temper,
+          name: NPC_DOG_NAMES[Math.floor(Math.random() * NPC_DOG_NAMES.length)],
+          type: DOG_TYPES[Math.floor(Math.random() * DOG_TYPES.length)],
+          coat: DOG_COATS[Math.floor(Math.random() * DOG_COATS.length)],
+          collar: COLLARS[Math.floor(Math.random() * COLLARS.length)].hex,
+          dog: { x: x - d0[0] * 2.5, y: y - d0[1] * 2.5, h: 0 },
+          met: false, said: 0
+        };
+        this.attachNpc(n);
+        roam.npcs.push(n);
+        return n;
+      }
+      return null;
+    }
+
+    // Three sprites each — owner, dog, collar — pooled rather than built and
+    // thrown away, since they come and go every few seconds as you walk.
+    attachNpc(n) {
+      this.npcPool = this.npcPool || [];
+      var slot = this.npcPool.pop();
+      if (!slot) {
+        slot = {
+          owner: this.add.sprite(0, 0, "people").setOrigin(0.5, 0.5).setDepth(100000),
+          dog: this.add.sprite(0, 0, "dogs").setOrigin(0.5, 0.5).setDepth(99997),
+          collar: this.add.sprite(0, 0, "dogs").setOrigin(0.5, 0.5).setDepth(99998)
+        };
+      }
+      slot.owner.setVisible(true).setFrame(n.look);
+      slot.dog.setVisible(true).setFrame(dogFrame(n.type, n.coat));
+      slot.collar.setVisible(true).setFrame(collarFrame(n.type)).setTint(n.collar);
+      n.spr = slot;
+    }
+
+    updateNpcs(dt, scale) {
+      var w = this.worldRef;
+      roam.nextNpc -= dt;
+      if (roam.nextNpc <= 0) {
+        // A failed spawn — nowhere on the pavement within reach — comes back
+        // round quickly rather than costing the whole interval, or a stretch
+        // with little pavement near it empties the streets for half a minute.
+        var made = roam.npcs.length < NPC_MAX ? this.spawnNpc() : true;
+        roam.nextNpc = made ? 3 + Math.random() * 5 : 0.6;
+      }
+
+      for (var i = roam.npcs.length - 1; i >= 0; i--) {
+        var n = roam.npcs[i];
+        var away = Math.hypot(n.x - roam.x, n.y - roam.y);
+        if (away > NPC_NEAR_M * 1.3) {
+          if (roam.greet === n) { roam.greet = null; roam.greetFor = 0; }
+          hideNpc(n);
+          roam.npcs.splice(i, 1);
+          continue;
+        }
+
+        var greeting = roam.greet === n;
+        var frame = n.spr.owner;
+
+        if (!greeting) {
+          // Walk the pavement. Straight on if that works, otherwise whichever
+          // turn does — which is enough to send them round corners and along
+          // the fronts of the houses without a graph to follow.
+          var step = n.speed * dt;
+          var nx = n.x + n.hx * step, ny = n.y + n.hy * step;
+          if (this.onFootpath(nx, ny)) {
+            n.x = nx; n.y = ny;
+          } else {
+            var opts = [[-n.hy, n.hx], [n.hy, -n.hx], [-n.hx, -n.hy]];
+            var turned = false;
+            for (var o = 0; o < opts.length; o++) {
+              var t = opts[Math.floor(Math.random() * opts.length)];
+              if (this.onFootpath(n.x + t[0] * 1.5, n.y + t[1] * 1.5)) {
+                n.hx = t[0]; n.hy = t[1]; turned = true; break;
+              }
+            }
+            if (!turned) { n.hx = -n.hx; n.hy = -n.hy; }
+          }
+          // Their dog trails them, on the same idea as yours.
+          var tx = n.x - n.hx * 2.4, ty = n.y - n.hy * 2.4;
+          var dx = tx - n.dog.x, dy = ty - n.dog.y, dd = Math.hypot(dx, dy);
+          if (dd > 0.2) {
+            var v = Math.min(3.4, Math.max(0.5, dd * 2));
+            var s2 = Math.min(dd, v * dt);
+            n.dog.x += dx / dd * s2; n.dog.y += dy / dd * s2;
+            n.dog.h = Math.atan2(dy, dx);
+          }
+        }
+
+        // A shy dog's owner gives you a wide berth, and says why.
+        if (n.temper === "shy" && away < 9 && !n.said) {
+          n.said = 1;
+          this.floatText(n.x, n.y - 1, NPC_LINES.shy[Math.floor(Math.random() * NPC_LINES.shy.length)]);
+          n.hx = (n.x - roam.x) / (away || 1); n.hy = (n.y - roam.y) / (away || 1);
+          n.speed = NPC_SPEED[1];
+        }
+
+        // Nose to nose. The two dogs have to find each other; the lead decides
+        // whether yours gets to stay for it.
+        if (!n.met && n.temper !== "shy" && !roam.greet && !roam.squirrel) {
+          var gap = Math.hypot(n.dog.x - roam.dog.x, n.dog.y - roam.dog.y);
+          if (gap < GREET_M * 2.2) { roam.greet = n; roam.greetFor = 0; }
+        }
+
+        if (greeting) {
+          var gap2 = Math.hypot(n.dog.x - roam.dog.x, n.dog.y - roam.dog.y);
+          // Only counts while they are actually together and you are not
+          // hauling him away — walk on and he does not get to say hello.
+          if (gap2 < GREET_M && roam.tension < 0.5) roam.greetFor += dt;
+          if (roam.greetFor === 0 && !n.said) {
+            n.said = 1;
+            var lines = NPC_LINES[n.temper];
+            this.floatText(n.x, n.y - 1, lines[Math.floor(Math.random() * lines.length)]);
+          }
+          if (roam.greetFor >= GREET_SECONDS) {
+            n.met = true;
+            roam.joy += GREET_JOY[n.temper] || 10;
+            roam.met.push(n.name);
+            this.floatText(roam.dog.x, roam.dog.y, "hello, " + n.name);
+            roam.greet = null; roam.greetFor = 0;
+            n.speed = NPC_SPEED[0] + Math.random() * 0.6;
+          } else if (roam.tension > 0.85 && roam.greetFor < 0.4) {
+            // Marched straight past. He does not forget, but he does move on.
+            roam.greet = null; roam.greetFor = 0;
+            n.met = true;
+          }
+        }
+
+        n.spr.owner.setPosition(n.x * scale, n.y * scale)
+          .setRotation(Math.atan2(n.hy, n.hx));
+        n.spr.dog.setPosition(n.dog.x * scale, n.dog.y * scale).setRotation(n.dog.h);
+        n.spr.collar.setPosition(n.dog.x * scale, n.dog.y * scale).setRotation(n.dog.h);
+      }
+    }
+
     // A squirrel, which is the one thing on this map with an opinion of its own.
     // It bolts past, he goes after it, and you have about a second to take a
     // grip before the lead is out of your hand.
@@ -3568,9 +3770,18 @@
         roam.nextSquirrel -= dt;
         if (roam.nextSquirrel > 0 || roam.metres < 12) return;
         // Out of a garden or a park — somewhere with something to climb.
-        var th = Math.random() * Math.PI * 2, r = 7 + Math.random() * 5;
-        var sx = roam.dog.x + Math.cos(th) * r, sy = roam.dog.y + Math.sin(th) * r;
-        if (this.dogBlocked(sx, sy)) { roam.nextSquirrel = 4; return; }
+        // Several candidates, not one: a single sample lands in a building
+        // often enough in a built-up street that squirrels stopped happening,
+        // and giving up cost four seconds every time it did.
+        var sx = 0, sy = 0, th = 0, found = false;
+        for (var att = 0; att < 14 && !found; att++) {
+          th = Math.random() * Math.PI * 2;
+          var rr = 7 + Math.random() * 5;
+          sx = roam.dog.x + Math.cos(th) * rr;
+          sy = roam.dog.y + Math.sin(th) * rr;
+          if (!this.dogBlocked(sx, sy)) found = true;
+        }
+        if (!found) { roam.nextSquirrel = 1.5; return; }
         var away = th + (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.8);
         roam.squirrel = sq = { x: sx, y: sy, vx: Math.cos(away) * 5.5,
                                vy: Math.sin(away) * 5.5, life: SQUIRREL_LIFE, ungripped: 0 };
@@ -4557,6 +4768,17 @@
 
   // Keyboard: space to play or pause, arrows to scrub or change speed, +/- to
   // zoom, Escape to stop. Ignored while you are typing in a field.
+  // Give an NPC's three sprites back to the pool rather than destroying them:
+  // they come and go every few seconds as you walk down a street.
+  function hideNpc(n) {
+    if (!n.spr) return;
+    n.spr.owner.setVisible(false);
+    n.spr.dog.setVisible(false);
+    n.spr.collar.setVisible(false);
+    if (scene) { scene.npcPool = scene.npcPool || []; scene.npcPool.push(n.spr); }
+    n.spr = null;
+  }
+
   // ---------- roam UI ----------
   var stickEl = document.getElementById("stick");
   function showStick(x, y) {
@@ -4656,15 +4878,19 @@
 
     var counts = {};
     roam.sniffed.forEach(function (s) { counts[s.kind] = (counts[s.kind] || 0) + 1; });
-    var kpi = function (v, l) {
-      return '<div class="kpi"><b>' + v + "</b><span>" + l + "</span></div>";
+    // Labels agree with their number: "1 things sniffed" reads as a bug.
+    var kpi = function (v, one, lots) {
+      var label = lots === undefined ? one : (v === 1 ? one : lots);
+      return '<div class="kpi"><b>' + v + "</b><span>" + label + "</span></div>";
     };
+    var squirrels = roam.held + roam.slipped;
     document.getElementById("card-kpis").innerHTML =
-      kpi(roam.sniffed.length, "things sniffed") +
-      kpi(Object.keys(roam.places).length, "places called at") +
-      kpi(roam.held + roam.slipped, "squirrels") +
+      kpi(roam.sniffed.length, "thing sniffed", "things sniffed") +
+      kpi(Object.keys(roam.places).length, "place called at", "places called at") +
+      kpi(roam.met.length, "dog met", "dogs met") +
+      kpi(squirrels, "squirrel", "squirrels") +
       kpi(Math.round(roam.offLeadFor) + "s", "off the lead") +
-      kpi(roam.refused, "walked past");
+      kpi(roam.refused, "thing walked past", "things walked past");
 
     var many = function (n, one, lots) {
       return "<b>" + n + "</b> " + (n === 1 ? one : lots);
@@ -4678,6 +4904,11 @@
     var names = Object.keys(roam.places);
     var lines = [];
     if (bits.length) lines.push("He got his nose into " + bits.join(", ") + ".");
+    if (roam.met.length) {
+      var uniq = roam.met.filter(function (v, i) { return roam.met.indexOf(v) === i; });
+      lines.push("Said hello to " + uniq.slice(0, 4).join(", ") +
+        (uniq.length > 4 ? " and " + (uniq.length - 4) + " more" : "") + ".");
+    }
     if (names.length) lines.push("Called at " + names.slice(0, 4).join(", ") +
       (names.length > 4 ? " and " + (names.length - 4) + " more" : "") + ".");
     if (roam.slipped) lines.push("Slipped the lead <b>" + roam.slipped +
