@@ -661,6 +661,128 @@ async function waitForReady(page) {
     check("actions are a bonus, not a shortcut", treated.joy - joyBeforeTreats < 60,
           "+" + (treated.joy - joyBeforeTreats).toFixed(0) + " joy from five treats");
 
+    // Tiring out, and the bench that fixes it. Stamina goes on ground covered,
+    // not on the clock, so standing about talking to somebody is free.
+    await resetRoam();
+    // Measured as a delta — zeroing the distance here would leave the walk
+    // looking like nothing happened when the report card is checked later.
+    const stam = await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      return { energy: r.energy, m: r.metres };
+    });
+    await page.keyboard.down("ArrowRight");
+    await page.waitForTimeout(2500);
+    await page.keyboard.up("ArrowRight");
+    const worn = await page.evaluate(() => ({
+      energy: window.dogwalk.roam.energy, m: window.dogwalk.roam.metres }));
+    check("walking tires him out", worn.energy < stam.energy,
+          stam.energy.toFixed(0) + "% → " + worn.energy.toFixed(0) + "% over " +
+          (worn.m - stam.m).toFixed(0) + "m");
+
+    // A bench has to exist to be sat on. At the old rate they were park-only
+    // and rare enough that a whole town could come out with none at all.
+    const benches = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      const bs = r.interests.filter((i) => i.kind === "bench");
+      for (const b of bs) {
+        for (let a = 0; a < 12; a++) {
+          const th = a * Math.PI / 6;
+          const x = b.x + Math.cos(th) * 2, y = b.y + Math.sin(th) * 2;
+          if (!s.blocked(x, y)) { r.x = x; r.y = y; r.energy = 40; return bs.length; }
+        }
+      }
+      return 0;
+    });
+    check("there are benches to sit on", benches > 0, benches + " in this world");
+    if (benches) {
+      await page.waitForTimeout(400);
+      await page.keyboard.press("r");
+      await page.waitForTimeout(2000);
+      const rested = await page.evaluate(() => ({
+        resting: window.dogwalk.roam.resting, energy: window.dogwalk.roam.energy }));
+      check("a sit down puts it back", rested.resting && rested.energy > 40,
+            JSON.stringify(rested));
+      await page.keyboard.down("ArrowRight");
+      await page.waitForTimeout(400);
+      await page.keyboard.up("ArrowRight");
+      check("walking off gets you up",
+            !(await page.evaluate(() => window.dogwalk.roam.resting)));
+    }
+
+    // The other end of a dog, and what the bins are for.
+    await page.evaluate(() => { const r = window.dogwalk.roam; r.nextGo = r.metres; });
+    await page.waitForTimeout(900);
+    check("he needs to go", await page.evaluate(() => !!window.dogwalk.roam.mess));
+    await page.keyboard.press("g");
+    await page.waitForTimeout(300);
+    check("you can pick up after him", await page.evaluate(() =>
+      window.dogwalk.roam.carrying && window.dogwalk.roam.pickedUp === 1));
+    const bins = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      const bs = r.interests.filter((i) => i.kind === "bin");
+      for (const b of bs) {
+        for (let a = 0; a < 12; a++) {
+          const th = a * Math.PI / 6;
+          const x = b.x + Math.cos(th) * 2, y = b.y + Math.sin(th) * 2;
+          if (!s.blocked(x, y)) { r.x = x; r.y = y; return bs.length; }
+        }
+      }
+      return 0;
+    });
+    if (bins) {
+      await page.waitForTimeout(400);
+      await page.keyboard.press("g");
+      await page.waitForTimeout(300);
+      check("and put it in a real bin", await page.evaluate(() =>
+        !window.dogwalk.roam.carrying && window.dogwalk.roam.binned === 1),
+        bins + " bins in this world");
+    }
+
+    // Favours, from people you meet and from the shops themselves.
+    const favours = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      r.quests = [];
+      for (let i = 0; i < 8; i++) s.offerQuest("a neighbour");
+      return { n: r.quests.length, kinds: r.quests.map((q) => q.kind),
+               named: r.quests.filter((q) => q.kind === "errand")
+                              .map((q) => q.target.name) };
+    });
+    check("people ask you for favours", favours.n > 0, JSON.stringify(favours.kinds));
+    check("no more than three at once", favours.n <= 3, favours.n);
+    check("no two of the same favour at once",
+          new Set(favours.kinds).size === favours.kinds.length,
+          JSON.stringify(favours.kinds));
+    check("errands point at real named places",
+          favours.kinds.indexOf("errand") < 0 ||
+          favours.named.every((nm) => typeof nm === "string" && nm.length > 1),
+          JSON.stringify(favours.named));
+    await page.waitForTimeout(400);
+    check("they are listed on screen", await page.evaluate(() =>
+      document.getElementById("quests").classList.contains("on") &&
+      document.querySelectorAll(".quest").length === window.dogwalk.roam.quests.length));
+
+    // Calling at a shop completes from the pavement outside: its label sits at
+    // the centre of the building, which is inside the walls.
+    const arrived = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      const q = r.quests.find((x) => x.kind === "errand") || r.quests.find((x) => x.target);
+      if (!q) return null;
+      for (let d = 2; d < 16; d += 1) {
+        for (let a = 0; a < 12; a++) {
+          const th = a * Math.PI / 6;
+          const x = q.target.x + Math.cos(th) * d, y = q.target.y + Math.sin(th) * d;
+          if (!s.blocked(x, y)) { r.x = x; r.y = y; return { kind: q.kind, from: d }; }
+        }
+      }
+      return null;
+    });
+    if (arrived) {
+      await page.waitForTimeout(900);
+      check("turning up finishes the favour", await page.evaluate(() =>
+        window.dogwalk.roam.questsDone > 0),
+        arrived.kind + " completed from " + arrived.from + "m");
+    }
+
     // Other people, out walking their own dogs. A street with nobody on it is
     // a map rather than a place.
     await page.evaluate(() => { window.dogwalk.roam.nextNpc = 0; });
@@ -682,14 +804,26 @@ async function waitForReady(page) {
     // and you are not hauling him off.
     const beside = await page.evaluate(() => {
       const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
-      let n = r.npcs.find((x) => x.temper !== "shy" && !x.met);
-      if (!n) { n = s.spawnNpc(); if (n) { n.temper = "friendly"; n.met = false; } }
+      // A clean start: no squirrel due, nothing on his mind, and a fresh
+      // walker whose dog is nose to nose with yours.
+      r.npcs.forEach((n) => { n.met = true; });
+      r.nextSquirrel = 999; r.squirrel = null; r.recalling = false;
+      r.greet = null; r.greetFor = 0; r.dog.want = null; r.dog.sniffFor = 0;
+      // You stand there while they say hello. Leaving the walker ten metres
+      // back keeps the lead taut, and a taut lead is exactly what the greeting
+      // timer refuses to count — correctly, since that is you dragging him off.
+      for (let a = 0; a < 12; a++) {
+        const th = a * Math.PI / 6;
+        const x = r.x + Math.cos(th) * 1.8, y = r.y + Math.sin(th) * 1.8;
+        if (!s.dogBlocked(x, y)) { r.dog.x = x; r.dog.y = y; break; }
+      }
+      const n = s.spawnNpc();
       if (!n) return null;
-      r.squirrel = null; r.recalling = false; r.greet = null; r.dog.want = null;
-      n.met = false;
+      n.temper = "friendly"; n.met = false; n.said = 0;
       n.x = r.x + 2; n.y = r.y;
       n.dog.x = r.dog.x + 1.5; n.dog.y = r.dog.y;
-      return { name: n.name, temper: n.temper };
+      return { name: n.name,
+               leadGap: +Math.hypot(r.x - r.dog.x, r.y - r.dog.y).toFixed(1) };
     });
     if (beside) {
       await page.waitForTimeout(1000);
@@ -697,11 +831,13 @@ async function waitForReady(page) {
             JSON.stringify(await page.evaluate(() => ({
               greet: !!window.dogwalk.roam.greet,
               forS: +window.dogwalk.roam.greetFor.toFixed(1) }))));
-      await page.waitForTimeout(4500);
+      await page.waitForFunction(
+        (nm) => window.dogwalk.roam.met.indexOf(nm) >= 0,
+        beside.name, { timeout: 15000 }).catch(() => {});
       const met = await page.evaluate(() => ({
         met: window.dogwalk.roam.met, joy: window.dogwalk.roam.joy }));
       check("saying hello is worth having", met.met.length > 0 && met.joy > 0,
-            JSON.stringify(met));
+            JSON.stringify(met) + " lead gap " + beside.leadGap + "m");
     }
 
     // A nervous dog's owner gives you a wide berth and says why.

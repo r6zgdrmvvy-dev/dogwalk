@@ -25,9 +25,12 @@ Keyboard: space plays and pauses, left/right scrub, up/down change speed,
 
 ### No dog data? Put in a postcode
 
-You do not need a GPS collar to walk round your own streets. "Load data" takes
-a postcode and builds the same size of world anywhere from the real map, with no
-walk data behind it at all — then press Roam.
+You do not need a GPS collar to walk round your own streets. Press **Map** in
+the top bar, put a postcode in the box at the top, and it builds the same size
+of world there from the real map with no walk data behind it at all — then press
+Roam. (It used to be buried under a button called "Load data", below a JSON
+paste box, which is not where anybody was ever going to look for it. The Roam
+panel offers it too.)
 
 UK postcodes go through [postcodes.io](https://postcodes.io/), which is free,
 keyless and built for exactly this; anything else falls through to
@@ -176,7 +179,8 @@ The choice is kept in `localStorage`, and the dog trotting on the loading screen
 is yours.
 
 `WASD` or the arrow keys, shift to jog, space to grip the lead, `C` to whistle,
-`F` for a fuss, `T` for a treat, `E` to let him off the lead, Escape to finish.
+`F` for a fuss, `T` for a treat, `R` to sit down, `G` to pick up after him,
+`E` to let him off the lead, Escape to finish.
 
 Pace is set by how long the screen takes to cross, not by metres per second. At
 a realistic 2.2 m/s and sixty metres of view that was twenty-seven seconds —
@@ -245,6 +249,28 @@ to four metres back by design. Five treats to a walk, and he is delighted by the
 first half-dozen fusses and fairly indifferent after that — between them they
 come to about seventy joy against the hundred-odd a kilometre of decent sniffing
 earns, so standing on the spot pressing buttons cannot out-score a walk.
+
+**Tiring out, and the bench.** He starts fresh and flags over about a kilometre
+and a half — spent on ground covered rather than on the clock, so standing about
+talking to somebody is free, and a jog costs more than an amble. A tired dog
+trails further back and gets less out of a lamp post than a fresh one. Sitting
+down on a bench (`R`) puts it back, and a treat perks him up a little. Benches
+used to be park-only and rare enough that a whole town could come out with none
+at all, which made sitting down impossible; they are now on ordinary pavements
+too, as bus stops and rests outside the shops.
+
+**The other end of a dog.** Every half-kilometre or so he needs to go. You have
+about twenty seconds to pick up after him (`G`) before you have walked off and
+left it — and then you are carrying it until you find a bin, which is what
+finally gives the four hundred-odd real bins on the map something to be. Doing
+it properly is worth something; leaving it costs you rather more.
+
+**Favours.** People you meet ask for a hand, and so do the shops and halls the
+map already knows the names of. Call at a named place, meet a couple more dogs,
+or find something they dropped nearby — three at a time, never two of the same,
+and every target is a real building off the OSM tags rather than an invented
+waypoint. Calling at a shop completes from the pavement outside, because its
+label sits at the centre of the building, which is inside the walls.
 
 **Squirrels.** Every half-minute or so one bolts past. He is after it instantly
 and you have about a second to grip the lead — hold space, or the button that

@@ -188,7 +188,38 @@
 
   /* How good a walk he is having. One bar, because it is one number, and it
      fills warm as it goes — a dog's day is not a percentage. */
-  #roam-joy { width: 84px; display: flex; flex-direction: column; gap: 3px; }
+  #roam-joy, #roam-energy { width: 76px; display: flex; flex-direction: column; gap: 3px; }
+  #roam-energy i {
+    display: block; height: 7px; border-radius: 4px;
+    background: rgba(255,255,255,0.08); border: 1px solid var(--panel-edge);
+    position: relative; overflow: hidden;
+  }
+  #roam-energy i::after {
+    content: ""; position: absolute; inset: 0; width: var(--energy, 100%);
+    background: linear-gradient(90deg, #4b7f3a, var(--good));
+    transition: width 0.25s ease;
+  }
+  #roam-energy.low i::after { background: linear-gradient(90deg, #8a4a22, #d2762f); }
+  #roam-energy.spent i::after { background: linear-gradient(90deg, #7a2f2f, #c4402f); }
+  #roam-energy span { font-size: 10px; opacity: 0.6; }
+  #btn-bag.off { display: none; }
+  #btn-bag.urgent { background: var(--accent); color: #2a1c0a; border-color: var(--accent-dark); }
+
+  /* Favours people have asked of you. Top-left under the stats, out of the way
+     of the transport bar, and capped at three so it never becomes a wall. */
+  #quests {
+    position: fixed; z-index: 19; left: 14px; top: 92px; width: min(250px, 46vw);
+    display: none; flex-direction: column; gap: 6px; pointer-events: none;
+  }
+  #quests.on { display: flex; }
+  .quest {
+    background: var(--panel); border: 2px solid var(--panel-edge);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px; padding: 6px 9px; font-size: 12px; line-height: 1.35;
+  }
+  .quest b { display: block; color: var(--accent); font-size: 12px; }
+  .quest span { opacity: 0.65; font-size: 11px; }
+
   #roam-joy i {
     display: block; height: 7px; border-radius: 4px;
     background: rgba(255,255,255,0.08); border: 1px solid var(--panel-edge);
@@ -247,6 +278,11 @@
   #roam-panel h3 { margin: 0 0 6px; font-size: 18px; }
   #roam-panel p { margin: 0 0 14px; font-size: 13px; opacity: 0.75; line-height: 1.45; }
   #roam-panel .row { display: flex; gap: 8px; margin-top: 16px; }
+  .elsewhere { margin: 14px 0 0 !important; font-size: 12px !important; }
+  .linkish {
+    background: none; border: none; padding: 0; font: inherit; cursor: pointer;
+    color: var(--accent); text-decoration: underline;
+  }
   #data-panel h3.sub {
     margin: 22px 0 6px; font-size: 15px;
     border-top: 1px solid var(--panel-edge); padding-top: 16px;
@@ -436,7 +472,7 @@
     <button class="btn" id="btn-walks">Walks</button>
     <button class="btn" id="btn-roam">Roam</button>
     <button class="btn" id="btn-stats">Stats</button>
-    <button class="btn" id="btn-data">Load data</button>
+    <button class="btn" id="btn-data">Map</button>
     <div id="zoom">
       <button class="btn" id="btn-zoom-in" aria-label="Zoom in">+</button>
       <button class="btn" id="btn-zoom-out" aria-label="Zoom out">&minus;</button>
@@ -459,10 +495,15 @@
     <div id="roam-joy" title="How good a walk he is having">
       <i></i><span>his walk</span>
     </div>
+    <div id="roam-energy" title="How much he has left in him">
+      <i></i><span>legs</span>
+    </div>
     <div class="acts">
       <button class="btn" id="btn-whistle" title="Call him back (C)">♪ Whistle</button>
       <button class="btn" id="btn-pet" title="Give him a fuss (F)">Pet</button>
       <button class="btn" id="btn-treat" title="Give him a treat (T)">Treat <b id="treat-n">5</b></button>
+      <button class="btn" id="btn-rest" title="Sit down on a bench (R)">Sit</button>
+      <button class="btn off" id="btn-bag" title="Pick up after him / bin it (G)">Bag it</button>
     </div>
     <button class="btn" id="btn-roam-lead" disabled>Off the lead</button>
     <button class="btn primary off" id="btn-roam-hold">Hold!</button>
@@ -490,6 +531,8 @@
   </div>
 </div>
 
+<div id="quests"></div>
+
 <div id="stick"><i></i></div>
 
 <div id="roam-panel">
@@ -515,6 +558,8 @@
       <button class="btn primary" id="btn-roam-go">Off we go</button>
       <button class="btn" id="btn-roam-cancel">Not now</button>
     </div>
+    <p class="elsewhere">Not your streets? <button class="linkish" id="btn-elsewhere">Walk
+      somewhere else</button> — put in a postcode and it builds that instead.</p>
   </div>
 </div>
 
@@ -546,7 +591,17 @@
 
 <div id="data-panel">
   <div class="card">
-    <h2>Load walk data</h2>
+    <h2>Where are you walking?</h2>
+    <p>Put in a postcode and it builds a world there from the real map — the
+       streets, the shops, the lamp posts — about a kilometre square. No tracker
+       and no data needed. Then press <b>Roam</b>.</p>
+    <div class="row">
+      <input type="text" id="place-input" placeholder="e.g. G46 6QE" maxlength="60">
+      <button class="btn primary" id="btn-place">Take me there</button>
+    </div>
+    <div id="place-msg"></div>
+
+    <h3 class="sub">Got GPS data from a tracker?</h3>
     <p>Paste GPS points as <code>[{"lat":55.79,"lng":-4.29,"t":"2026-08-10T07:12:00Z"}]</code>,
        or load a <code>guinness_walk.json</code> exported by <code>scripts/export_tractive.py</code>.</p>
     <label class="field">Your dog's name
@@ -561,16 +616,6 @@
       <button class="btn" id="btn-close-data" style="margin-left:auto">Close</button>
     </div>
     <div id="data-msg"></div>
-
-    <h3 class="sub">Or just walk your own streets</h3>
-    <p>No tracker, no data — put in a postcode and it builds the same size of
-       world there, about a kilometre square, from the real map. Then press
-       Roam.</p>
-    <div class="row">
-      <input type="text" id="place-input" placeholder="e.g. G46 6QE" maxlength="60">
-      <button class="btn primary" id="btn-place">Take me there</button>
-    </div>
-    <div id="place-msg"></div>
   </div>
 </div>
 
@@ -2293,8 +2338,15 @@
             props.push({ x: wx3, y: wy3, t: PROP.lamp, r: rot });
           } else if (seededRandom(pseed % 3571) < 0.03) {
             props.push({ x: wx3, y: wy3, t: PROP.bin });
+          } else if (parkMap[pi2] && seededRandom(pseed % 2749) < 0.02) {
+            props.push({ x: wx3, y: wy3, t: PROP.bench });
           } else if (seededRandom(pseed % 2749) < 0.006) {
-            props.push({ x: wx3, y: wy3, t: parkMap[pi2] ? PROP.bench : PROP.postbox });
+            // A bench on an ordinary street is a bus stop or a rest outside the
+            // shops. At the old rate they only existed in parks and a whole
+            // town could come out with none at all, which made sitting down —
+            // and the whole point of a bench — unreachable.
+            props.push({ x: wx3, y: wy3, t: seededRandom(pseed % 1637) < 0.45
+                                            ? PROP.bench : PROP.postbox });
           }
         }
       }
@@ -2488,6 +2540,62 @@
   var WHISTLE_COOL = 2;
   var PET_LINES = ["good boy", "who's a good dog", "aw, look at you", "there we go"];
 
+  // How tired he is, which is what gives a walk a shape: eager at the start,
+  // flagging by the end, and a sit on a bench is worth stopping for. Drains
+  // with ground covered rather than with the clock, so standing about talking
+  // to somebody does not wear him out.
+  // Short enough that it happens inside one outing: a roam is a few hundred
+  // metres to a couple of kilometres, and at three thousand he never once
+  // flagged, which made the bar decoration and the bench pointless.
+  var STAMINA_M = 1600;                      // metres from fresh to done in
+  var JOG_DRAIN = 2.2;                       // jogging takes it out of him
+  var TIRED_AT = 35, DONE_AT = 15;           // percent
+  var REST_M = 3.2;                          // how near a bench you have to be
+  var REST_PER_S = 9;                        // energy back per second sitting
+  var REST_JOY_PER_S = 0.8;
+
+  // The other end of a dog. He goes, you pick it up, and then you are carrying
+  // it until you find a bin — which is what finally gives the bins the real map
+  // is full of something to be.
+  var GO_AFTER_M = [500, 1100];              // metres between, random in range
+  // It lands where he is, and he is a lead's length away — so this has to be
+  // at least that, or the button can never be pressed. Same mistake I made
+  // with petting.
+  var BAG_M = LEAD_M + 1.6;
+  var BIN_M = 3.0;                           // near enough to drop it in
+  var BAG_WINDOW = 22;                       // seconds before you have walked off
+  var BAG_JOY = 6, BIN_JOY = 10, LEFT_PENALTY = 14;
+
+  // Favours. People you meet ask for a hand with something, and so do the
+  // shops and halls the map already knows the names of. Every target is a real
+  // place off the OSM tags or a real person walking a real dog, so a quest is
+  // never "go to the marker" — it is "pop into the library".
+  var QUEST_MAX = 3;
+  // How near counts as arriving, by what you are arriving at. A named place is
+  // a whole building and its label sits at the centre of it — which is inside
+  // the walls, where you cannot stand — so calling at a shop has to complete
+  // from the pavement outside. A dropped glove is a spot on the ground.
+  var QUEST_REACH = { errand: 16, find: 6 };
+  var ASK_REACH = 7;                         // a shop notices you going past
+  var QUEST_FROM_GREET = 0.55;               // chance a greeting comes with one
+  var QUEST_JOY = { errand: 22, meet: 26, find: 20 };
+
+  var ERRAND_LINES = [
+    "Would you mind dropping this in at {t}? I'm going the other way.",
+    "If you're passing {t}, could you let them know I'll be late?",
+    "I've left my brolly at {t}. Grab it for me?",
+    "Do us a favour — say hello to the folk at {t}."
+  ];
+  var MEET_LINES = [
+    "My pal walks round here about now. Say hello to {n} dogs for me?",
+    "There's a few of us out today — see if you can meet {n} more."
+  ];
+  var FIND_LINES = [
+    "I've dropped a glove somewhere back there. Any chance?",
+    "My keys went out of my pocket round here somewhere.",
+    "There's a tennis ball gone missing near here — he'll be gutted."
+  ];
+
   var NPC_DOG_NAMES = [
     "Poppy", "Milo", "Bear", "Nessie", "Rufus", "Hamish", "Luna", "Bramble",
     "Skye", "Ziggy", "Maisie", "Ollie", "Dougal", "Pepper", "Rowan", "Tilly"
@@ -2514,6 +2622,9 @@
     sniffed: [], places: {}, held: 0, slipped: 0, refused: 0,
     npcs: [], nextNpc: 2, met: [], greet: null, greetFor: 0,
     treats: TREATS_PER_WALK, petted: 0, treatsGiven: 0, petCool: 0, whistleCool: 0,
+    energy: 100, resting: false, restedFor: 0, rests: 0,
+    nextGo: 0, mess: null, carrying: false, pickedUp: 0, leftBehind: 0, binned: 0,
+    quests: [], questsDone: 0, questSeq: 0, askedAt: {},
     squirrel: null, nextSquirrel: 30, gripping: false,
     interests: null, buckets: null, warn: "",
     keys: {},                                // held keys, by direction
@@ -3436,6 +3547,13 @@
       roam.refused = 0; roam.warn = ""; roam.gripping = false;
       roam.squirrel = null; roam.recalling = false;
       roam.nextSquirrel = SQUIRREL_EVERY[0];
+      roam.treats = TREATS_PER_WALK; roam.petted = 0; roam.treatsGiven = 0;
+      roam.petCool = 0; roam.whistleCool = 0;
+      roam.energy = 100; roam.resting = false; roam.restedFor = 0; roam.rests = 0;
+      roam.nextGo = GO_AFTER_M[0] + Math.random() * (GO_AFTER_M[1] - GO_AFTER_M[0]);
+      roam.mess = null; roam.carrying = false;
+      roam.pickedUp = 0; roam.leftBehind = 0; roam.binned = 0;
+      roam.quests = []; roam.questsDone = 0; roam.questSeq = 0; roam.askedAt = {};
       roam.startedAt = Date.now();
       roam.lastTick = 0;
       this.buildInterests();
@@ -3524,7 +3642,9 @@
       var mag = Math.hypot(ix, iy);
       if (mag > 1) { ix /= mag; iy /= mag; mag = 1; }
 
-      var speed = (roam.keys.fast ? JOG_MS : WALK_MS) * mag;
+      // Standing up is just walking off, which is what you actually do.
+      if (roam.resting && mag > 0.01) { roam.resting = false; }
+      var speed = roam.resting ? 0 : (roam.keys.fast ? JOG_MS : WALK_MS) * mag;
       var moved = 0;
       if (speed > 0.01) {
         for (var st = 0; st < steps; st++) {
@@ -3567,10 +3687,17 @@
 
       if (roam.petCool > 0) roam.petCool -= total;
       if (roam.whistleCool > 0) roam.whistleCool -= total;
+      this.updateStamina(total, moved);
+      this.updateBusiness(total, scale);
+      this.updateQuests(total);
       this.updateSquirrel(total, scale);
       this.updateNpcs(total, scale);
       this.updateRoamDog(total, scale);
       this.drawLead(scale);
+
+      // Flagging. Said plainly, once, rather than nagged every frame.
+      if (roam.energy < DONE_AT && !roam.warn) roam.warn = "He's had enough";
+      else if (roam.warn === "He's had enough" && roam.energy >= DONE_AT) roam.warn = "";
 
       // Off the lead is a park thing. Outside one he is not earning anything
       // and you are told about it, which is nagging rather than punishment —
@@ -3649,8 +3776,10 @@
       while (i >= 0) {
         var p = roam.trail[i];
         var seg = Math.hypot(p.x - prev.x, p.y - prev.y);
-        if (acc + seg >= LEASH_M) {
-          var f = (LEASH_M - acc) / (seg || 1);
+        // He drops back as he tires.
+        var trail = LEASH_M * (roam.energy < TIRED_AT ? 1.25 : 1);
+        if (acc + seg >= trail) {
+          var f = (trail - acc) / (seg || 1);
           tgt = { x: prev.x + (p.x - prev.x) * f, y: prev.y + (p.y - prev.y) * f };
           break;
         }
@@ -3687,7 +3816,11 @@
         d.sniffFor = Math.max(0, d.sniffFor - dt);
         if (d.sniffFor <= 0 && d.want) {
           d.want.done = true;
-          roam.joy += SNIFF_JOY[d.want.kind] || 5;
+          // A tired dog gets less out of a lamp post than a fresh one, which
+          // is what makes the bench and the treat worth bothering with.
+          var zip = roam.energy < DONE_AT ? 0.35
+                  : (roam.energy < TIRED_AT ? 0.65 : 1);
+          roam.joy += (SNIFF_JOY[d.want.kind] || 5) * zip;
           roam.sniffed.push({ kind: d.want.kind, name: d.want.name || null });
           if (d.want.name) roam.places[d.want.name] = 1;
           this.floatText(d.x, d.y, d.want.name || SNIFF_LABEL[d.want.kind] || "a good sniff");
@@ -3786,6 +3919,228 @@
       this.tweens.add({
         targets: t, y: t.y - 16 / z, alpha: 0, duration: 1400, ease: "Quad.easeOut",
         onComplete: function () { t.destroy(); }
+      });
+    }
+
+    // How much he has left in him. Spent on ground covered rather than on the
+    // clock, so standing about chatting to somebody does not tire him out, and
+    // a jog costs more than an amble. A sit on a bench puts it back, which is
+    // what finally makes the benches on the real map worth walking to.
+    updateStamina(dt, moved) {
+      if (roam.resting) {
+        roam.restedFor += dt;
+        roam.energy = Math.min(100, roam.energy + REST_PER_S * dt);
+        roam.joy += REST_JOY_PER_S * dt;
+        // He settles at your feet rather than casting about for lamp posts.
+        roam.dog.want = null;
+        return;
+      }
+      var cost = moved * (100 / STAMINA_M) * (roam.keys.fast ? JOG_DRAIN : 1);
+      roam.energy = Math.max(0, roam.energy - cost);
+    }
+
+    // Is there a bench close enough to sit on?
+    benchNear() {
+      var w = this.worldRef;
+      if (!w || !roam.interests) return null;
+      var best = null, bd = REST_M;
+      for (var i = 0; i < roam.interests.length; i++) {
+        var it = roam.interests[i];
+        if (it.kind !== "bench") continue;
+        var d = Math.hypot(it.x - roam.x, it.y - roam.y);
+        if (d < bd) { bd = d; best = it; }
+      }
+      return best;
+    }
+
+    // The nearest bin, for when you are carrying something you would rather
+    // not be. Bins are real: they are where the street furniture actually went.
+    binNear(radius) {
+      if (!roam.interests) return null;
+      var best = null, bd = radius;
+      for (var i = 0; i < roam.interests.length; i++) {
+        var it = roam.interests[i];
+        if (it.kind !== "bin") continue;
+        var d = Math.hypot(it.x - roam.x, it.y - roam.y);
+        if (d < bd) { bd = d; best = it; }
+      }
+      return best;
+    }
+
+    // The other end of a dog. Every half-kilometre or so he needs to go; you
+    // have twenty seconds or so to pick up after him before you have walked
+    // off and left it, and then you are carrying it until you find a bin.
+    updateBusiness(dt, scale) {
+      // He does not go while being hauled along, and not while resting.
+      if (!roam.mess && !roam.carrying && !roam.resting && roam.metres >= roam.nextGo) {
+        var d = roam.dog;
+        roam.mess = { x: d.x, y: d.y, left: BAG_WINDOW };
+        roam.nextGo = roam.metres + GO_AFTER_M[0] +
+          Math.random() * (GO_AFTER_M[1] - GO_AFTER_M[0]);
+        this.floatText(d.x, d.y, "…he needs a minute");
+        toast((state.dogName || "He") + " has been. Bag it (G)");
+        if (!this.messGfx) this.messGfx = this.add.graphics().setDepth(99990);
+      }
+
+      if (roam.mess) {
+        roam.mess.left -= dt;
+        if (this.messGfx) {
+          // A small mark on the pavement where it is, so you can find your way
+          // back to it if you have walked on a few steps.
+          this.messGfx.clear();
+          this.messGfx.fillStyle(0x6b5334, 0.9);
+          this.messGfx.fillCircle(roam.mess.x * scale, roam.mess.y * scale,
+                                  Math.max(1.5, scale * 0.28));
+        }
+        if (roam.mess.left <= 0) {
+          // You walked off. You are that person.
+          roam.leftBehind++;
+          roam.joy = Math.max(0, roam.joy - LEFT_PENALTY);
+          roam.mess = null;
+          if (this.messGfx) this.messGfx.clear();
+          toast("You left it. Somebody will step in that.");
+        }
+      } else if (this.messGfx) {
+        this.messGfx.clear();
+      }
+    }
+
+    // ---------- favours ----------
+
+    // Somewhere on the map with a name, for an errand to point at. Named
+    // places come off the OSM tags, so this is a real shop or hall or church
+    // rather than an invented waypoint.
+    pickPlace(awayFrom, minM) {
+      var w = this.worldRef;
+      if (!w || !w.labels) return null;
+      var used = {};
+      roam.quests.forEach(function (q) {
+        if (q.target && q.target.name) used[q.target.name] = 1;
+      });
+      var opts = w.labels.filter(function (l) {
+        return l.kind === "place" && !used[l.name] && l.x > 0 && l.y > 0 &&
+               l.x < w.widthM && l.y < w.heightM &&
+               Math.hypot(l.x - awayFrom.x, l.y - awayFrom.y) > minM;
+      });
+      if (!opts.length) return null;
+      return opts[Math.floor(Math.random() * opts.length)];
+    }
+
+    // Open ground within a short walk, for something dropped.
+    pickSpot(near, radius) {
+      for (var i = 0; i < 60; i++) {
+        var th = Math.random() * Math.PI * 2, r = 18 + Math.random() * radius;
+        var x = near.x + Math.cos(th) * r, y = near.y + Math.sin(th) * r;
+        if (!this.blocked(x, y)) return { x: x, y: y };
+      }
+      return null;
+    }
+
+    offerQuest(from) {
+      if (roam.quests.length >= QUEST_MAX) return null;
+      var here = { x: roam.x, y: roam.y };
+      // Only one of each kind at a time, and never two errands to the same
+      // place: two identical "say hello to 2 more dogs" in the list is not two
+      // favours, it is one favour written twice.
+      var taken = {};
+      var places = {};
+      roam.quests.forEach(function (q) {
+        taken[q.kind] = 1;
+        if (q.target && q.target.name) places[q.target.name] = 1;
+      });
+      var kinds = ["errand", "meet", "find"].filter(function (k) { return !taken[k]; });
+      if (!kinds.length) return null;
+      var kind = kinds[Math.floor(Math.random() * kinds.length)];
+      var q = { id: ++roam.questSeq, from: from, kind: kind, done: false };
+
+      if (kind === "errand") {
+        var place = this.pickPlace(here, 60);
+        if (!place) kind = q.kind = "find";
+        else {
+          q.target = { x: place.x, y: place.y, name: place.name };
+          q.text = ERRAND_LINES[Math.floor(Math.random() * ERRAND_LINES.length)]
+            .replace("{t}", place.name);
+          q.short = "Call at " + place.name;
+        }
+      }
+      if (kind === "meet") {
+        q.need = 1 + Math.floor(Math.random() * 2);
+        q.have = 0;
+        q.from0 = roam.met.length;
+        q.text = MEET_LINES[Math.floor(Math.random() * MEET_LINES.length)]
+          .replace("{n}", q.need);
+        q.short = "Say hello to " + q.need + " more dog" + (q.need > 1 ? "s" : "");
+      }
+      if (kind === "find") {
+        var spot = this.pickSpot(here, 90);
+        if (!spot) return null;
+        q.target = { x: spot.x, y: spot.y, name: "it" };
+        q.text = FIND_LINES[Math.floor(Math.random() * FIND_LINES.length)];
+        q.short = "Find what they dropped";
+      }
+      roam.quests.push(q);
+      toast(q.text);
+      renderQuests();
+      return q;
+    }
+
+    // Named buildings ask too — you walk past and somebody comes out. Each
+    // building only asks once a walk, so a parade of shops is not a queue of
+    // people badgering you.
+    checkBuildingQuests() {
+      var w = this.worldRef;
+      if (!w || !w.labels || roam.quests.length >= QUEST_MAX) return;
+      for (var i = 0; i < w.labels.length; i++) {
+        var l = w.labels[i];
+        if (l.kind !== "place" || roam.askedAt[l.name]) continue;
+        if (Math.hypot(l.x - roam.x, l.y - roam.y) > ASK_REACH) continue;
+        roam.askedAt[l.name] = 1;
+        // Not every shop wants something.
+        if (Math.random() > 0.5) return;
+        this.floatText(l.x, l.y, l.name);
+        this.offerQuest(l.name);
+        return;
+      }
+    }
+
+    updateQuests(dt) {
+      this.checkBuildingQuests();
+      for (var i = roam.quests.length - 1; i >= 0; i--) {
+        var q = roam.quests[i];
+        if (q.done) continue;
+        var got = false;
+        if (q.kind === "meet") {
+          q.have = roam.met.length - q.from0;
+          got = q.have >= q.need;
+        } else if (q.target) {
+          got = Math.hypot(q.target.x - roam.x, q.target.y - roam.y) <
+                (QUEST_REACH[q.kind] || 8);
+        }
+        if (!got) continue;
+        q.done = true;
+        roam.questsDone++;
+        roam.joy += QUEST_JOY[q.kind] || 20;
+        if (roam.treats < TREATS_PER_WALK) roam.treats++;
+        this.floatText(roam.x, roam.y, "✓ " + q.short);
+        toast("That's that done — " + q.short.toLowerCase());
+        roam.quests.splice(i, 1);
+        renderQuests();
+      }
+      this.drawQuestMarks();
+    }
+
+    // A ring where you are being asked to go. Drawn in world space so it sits
+    // on the place itself rather than on the edge of the screen.
+    drawQuestMarks() {
+      if (!this.questGfx) this.questGfx = this.add.graphics().setDepth(99991);
+      var g = this.questGfx, scale = this.worldScale;
+      g.clear();
+      var t = (this.time.now % 1400) / 1400;
+      roam.quests.forEach(function (q) {
+        if (!q.target) return;
+        var r = (3 + t * 3) * scale;
+        g.lineStyle(Math.max(1, scale * 0.2), 0xe8a33d, 0.75 * (1 - t));
+        g.strokeCircle(q.target.x * scale, q.target.y * scale, r);
       });
     }
 
@@ -3950,10 +4305,15 @@
             roam.joy += GREET_JOY[n.temper] || 10;
             roam.met.push(n.name);
             this.floatText(roam.dog.x, roam.dog.y, "hello, " + n.name);
+            // While you are stood there, they might ask you a favour.
+            if (Math.random() < QUEST_FROM_GREET) this.offerQuest(n.name + "'s owner");
             roam.greet = null; roam.greetFor = 0;
             n.speed = NPC_SPEED[0] + Math.random() * 0.6;
-          } else if (roam.tension > 0.85 && roam.greetFor < 0.4) {
-            // Marched straight past. He does not forget, but he does move on.
+          } else if (gap2 > GREET_NOTICE_M * 1.6) {
+            // You walked on. Measured by the two of them actually being pulled
+            // apart, not by the lead being taut: standing still while he
+            // strains at a lamp post makes the lead taut too, and testing that
+            // cancelled every greeting on the frame after it started.
             roam.greet = null; roam.greetFor = 0;
             n.met = true;
           }
@@ -5060,6 +5420,16 @@
     return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(2) + " km";
   }
 
+  function renderQuests() {
+    var el = document.getElementById("quests");
+    el.classList.toggle("on", roam.on && roam.quests.length > 0);
+    el.innerHTML = roam.quests.map(function (q) {
+      var prog = q.kind === "meet" ? " (" + q.have + "/" + q.need + ")" : "";
+      return '<div class="quest"><b>' + escapeHtml(q.short) + prog +
+             '</b><span>' + escapeHtml(q.from) + "</span></div>";
+    }).join("");
+  }
+
   function updateRoamBar() {
     if (!roam.on) return;
     document.getElementById("roam-dist").textContent = fmtDist(roam.metres);
@@ -5083,6 +5453,20 @@
     document.getElementById("btn-pet").disabled = roam.petCool > 0 || gap > REACH_M;
     document.getElementById("btn-treat").disabled = roam.treats <= 0 || gap > REACH_M;
     document.getElementById("treat-n").textContent = roam.treats;
+
+    var en = document.getElementById("roam-energy");
+    en.style.setProperty("--energy", Math.round(roam.energy) + "%");
+    en.classList.toggle("low", roam.energy < TIRED_AT && roam.energy >= DONE_AT);
+    en.classList.toggle("spent", roam.energy < DONE_AT);
+
+    var rest = document.getElementById("btn-rest");
+    rest.textContent = roam.resting ? "Up" : "Sit";
+    rest.disabled = !roam.resting && !scene.benchNear();
+
+    var bag = document.getElementById("btn-bag");
+    bag.classList.toggle("off", !roam.mess && !roam.carrying);
+    bag.textContent = roam.carrying ? "Find a bin" : "Bag it";
+    bag.classList.toggle("urgent", !!roam.mess);
 
     // The hint gives way to whatever needs saying, rather than both competing
     // for the same strip of bar.
@@ -5115,6 +5499,7 @@
       kpi(Object.keys(roam.places).length, "place called at", "places called at") +
       kpi(roam.met.length, "dog met", "dogs met") +
       kpi(roam.petted, "fuss", "fusses") +
+      kpi(roam.questsDone, "favour done", "favours done") +
       kpi(squirrels, "squirrel", "squirrels") +
       kpi(Math.round(roam.offLeadFor) + "s", "off the lead") +
       kpi(roam.refused, "thing walked past", "things walked past");
@@ -5143,6 +5528,11 @@
     else if (roam.held) lines.push("You held on to him through <b>" + roam.held +
       "</b> squirrel" + (roam.held > 1 ? "s" : "") + ".");
     if (roam.treatsGiven) lines.push("Gave him " + many(roam.treatsGiven, "treat", "treats") + ".");
+    if (roam.rests) lines.push("Sat down for a rest " + many(roam.rests, "time", "times") + ".");
+    if (roam.binned) lines.push("Picked up after him and found a bin, " +
+      many(roam.binned, "time", "times") + ".");
+    if (roam.leftBehind) lines.push("Left " + many(roam.leftBehind, "one", "of them") +
+      " on the pavement. Not your finest hour.");
     if (roam.refused > 2) lines.push("You marched him past <b>" + roam.refused +
       "</b> things he badly wanted a look at.");
     if (!lines.length) lines.push("Nothing much happened. Sometimes that is the walk.");
@@ -5314,6 +5704,7 @@
     if (!roam.on) return;
     var walked = roam.metres;
     roam.keys = {}; roam.stick = null; roam.gripping = false; hideStick();
+    roam.quests = []; renderQuests();
     saveRoamed();
     scene.endRoam();
     document.getElementById("roam-bar").classList.add("off");
@@ -5388,10 +5779,54 @@
     roam.treats--;
     roam.treatsGiven++;
     roam.joy += TREAT_JOY;
+    roam.energy = Math.min(100, roam.energy + 8);
     roam.dog.sniffFor = 0; roam.dog.want = null;
     comeToHeel(1.3);
     if (scene) scene.floatText(roam.dog.x, roam.dog.y, "✦ " + (state.dogName || "he") +
       " has a treat");
+    updateRoamBar();
+    return true;
+  }
+
+  // A sit down. Only where there is something to sit on, which is what makes a
+  // bench on the real map worth walking to when he is flagging.
+  function restHere() {
+    if (!roam.on || !scene) return false;
+    if (roam.resting) { roam.resting = false; toast("Up we get"); return true; }
+    var bench = scene.benchNear();
+    if (!bench) { toast("Nothing to sit on here"); return false; }
+    roam.resting = true;
+    roam.rests++;
+    comeToHeel(1.1);
+    scene.floatText(roam.x, roam.y, "a sit down");
+    return true;
+  }
+
+  // Pick up after him, and later put it in a bin. Two presses of the same
+  // button, because it is the same job.
+  function bagIt() {
+    if (!roam.on || !scene) return false;
+    if (roam.carrying) {
+      var bin = scene.binNear(BIN_M);
+      if (!bin) { toast("Find a bin"); return false; }
+      roam.carrying = false;
+      roam.binned++;
+      roam.joy += BIN_JOY;
+      scene.floatText(roam.x, roam.y, "in the bin");
+      updateRoamBar();
+      return true;
+    }
+    if (!roam.mess) return false;
+    if (Math.hypot(roam.mess.x - roam.x, roam.mess.y - roam.y) > BAG_M) {
+      toast("Go back for it");
+      return false;
+    }
+    roam.mess = null;
+    roam.carrying = true;
+    roam.pickedUp++;
+    roam.joy += BAG_JOY;
+    if (scene.messGfx) scene.messGfx.clear();
+    toast("Bagged. Now find a bin.");
     updateRoamBar();
     return true;
   }
@@ -5407,6 +5842,8 @@
     document.getElementById("btn-roam-hold").addEventListener(ev, function () { setGrip(false); });
   });
 
+  document.getElementById("btn-rest").addEventListener("click", restHere);
+  document.getElementById("btn-bag").addEventListener("click", bagIt);
   document.getElementById("btn-whistle").addEventListener("click", whistle);
   document.getElementById("btn-pet").addEventListener("click", petDog);
   document.getElementById("btn-treat").addEventListener("click", giveTreat);
@@ -5464,6 +5901,11 @@
   }
 
   document.getElementById("btn-place").addEventListener("click", goToPlace);
+  document.getElementById("btn-elsewhere").addEventListener("click", function () {
+    document.getElementById("roam-panel").classList.remove("open");
+    document.getElementById("data-panel").classList.add("open");
+    document.getElementById("place-input").focus();
+  });
   document.getElementById("place-input").addEventListener("keydown", function (e) {
     if (e.key === "Enter") { e.preventDefault(); goToPlace(); }
   });
@@ -5509,6 +5951,8 @@
       if (k2 === "c") { e.preventDefault(); whistle(); return true; }
       if (k2 === "f") { e.preventDefault(); petDog(); return true; }
       if (k2 === "t") { e.preventDefault(); giveTreat(); return true; }
+      if (k2 === "r") { e.preventDefault(); restHere(); return true; }
+      if (k2 === "g") { e.preventDefault(); bagIt(); return true; }
     }
     var dir = ROAM_KEYS[e.key];
     if (!dir) return false;
