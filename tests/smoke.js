@@ -327,6 +327,21 @@ async function waitForReady(page) {
     await page.click("#btn-roam-go");
     await page.waitForTimeout(1200);
 
+    // Each block below sets its own starting state. The suite runs as one long
+    // session, so without this a squirrel in one check leaves him off the lead
+    // for the next and the failure lands somewhere unrelated.
+    const resetRoam = () => page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      r.greet = null; r.greetFor = 0; r.squirrel = null; r.recalling = false;
+      r.recallReason = null; r.offLead = false; r.warn = ""; r.gripping = false;
+      r.dog.want = null; r.dog.sniffFor = 0; r.dog.strainFor = 0;
+      r.npcs.forEach((n) => { n.met = true; });
+      r.nextSquirrel = 999;          // an earlier check left the timer at zero
+      (r.interests || []).forEach((i) => { i.done = false; i.cool = 0; });
+      const s = window.game.scene.getScene("world");
+      if (s.critter) s.critter.setVisible(false);
+    });
+
     const roamProbe = () => page.evaluate(() => {
       const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
       return { on: r.on, x: r.x, y: r.y, metres: r.metres,
@@ -363,7 +378,13 @@ async function waitForReady(page) {
       const dirs = [["ArrowRight", 1, 0], ["ArrowLeft", -1, 0],
                     ["ArrowDown", 0, 1], ["ArrowUp", 0, -1]];
       for (const [key, dx, dy] of dirs) {
-        if (!s.blocked(r.x + dx * 4, r.y + dy * 4)) return { key, dx, dy };
+        // Open far enough for the pace he now walks at: 2.5 seconds covers
+        // fourteen metres, so "clear at four" says nothing.
+        let clear = true;
+        for (let d = 1; d <= 22; d += 1) {
+          if (s.blocked(r.x + dx * d, r.y + dy * d)) { clear = false; break; }
+        }
+        if (clear) return { key, dx, dy };
       }
       return null;
     });
@@ -429,17 +450,20 @@ async function waitForReady(page) {
     check("things to sniff are thinned out", spacing.n > 0 && spacing.closest >= 7.9,
           spacing.n + " interests, closest pair " + spacing.closest.toFixed(1) + "m");
 
+    await resetRoam();
     // Let him have one: stand beside it and wait.
     const target = await page.evaluate(() => {
       const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
-      const it = s.nearestWant(r.x, r.y, 90);
-      if (!it) return null;
-      for (let a = 0; a < 16; a++) {
-        const th = a * Math.PI / 8;
-        const x = it.x + Math.cos(th) * 2.5, y = it.y + Math.sin(th) * 2.5;
-        if (s.blocked(x, y)) continue;
-        r.x = x; r.y = y; r.dog.x = x; r.dog.y = y; r.dog.want = null;
-        return { kind: it.kind };
+      // Go to one, rather than hoping one is near wherever the last check left
+      // us — the fixture town is small and its interests are clustered.
+      for (const it of r.interests) {
+        for (let a = 0; a < 16; a++) {
+          const th = a * Math.PI / 8;
+          const x = it.x + Math.cos(th) * 2.5, y = it.y + Math.sin(th) * 2.5;
+          if (s.blocked(x, y)) continue;
+          r.x = x; r.y = y; r.dog.x = x; r.dog.y = y; r.dog.want = null;
+          return { kind: it.kind };
+        }
       }
       return null;
     });
@@ -485,12 +509,14 @@ async function waitForReady(page) {
       check("he gives up on what he cannot reach", taut.refused > 0, taut.refused);
     }
 
+    await resetRoam();
     // A squirrel. Not gripping means he is off after it.
     await page.evaluate(() => {
       const r = window.dogwalk.roam;
       r.metres = Math.max(r.metres, 30); r.nextSquirrel = 0; r.gripping = false;
     });
-    await page.waitForTimeout(1200);
+    await page.waitForFunction(() => !!window.dogwalk.roam.squirrel,
+                               null, { timeout: 20000 }).catch(() => {});
     check("a squirrel turns up", await page.evaluate(() =>
       !!window.dogwalk.roam.squirrel &&
       window.game.scene.getScene("world").critter.visible));
@@ -546,6 +572,95 @@ async function waitForReady(page) {
         window.dogwalk.roam.offLead && !window.game.scene.getScene("world").leadGfx.commandBuffer.length));
     }
 
+    // Pace. What decides whether walking feels right is how long the screen
+    // takes to cross, not metres per second: at the old 2.2 m/s and sixty
+    // metres of view that was twenty-seven seconds, a third of what a top-down
+    // game moves at.
+    const pace = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world");
+      const v = s.cameras.main.worldView, across = v.width / s.worldScale;
+      return { across: Math.round(across), walk: window.dogwalk.pace.walk,
+               jog: window.dogwalk.pace.jog,
+               crossWalk: +(across / window.dogwalk.pace.walk).toFixed(1),
+               crossJog: +(across / window.dogwalk.pace.jog).toFixed(1) };
+    });
+    check("the view is wide enough to see where you are going",
+          pace.across >= 70 && pace.across <= 110, pace.across + "m across");
+    check("the screen crosses at a game's pace, not a rambler's",
+          pace.crossWalk < 20 && pace.crossJog < 11,
+          pace.crossWalk + "s walking, " + pace.crossJog + "s jogging");
+
+    await resetRoam();
+    // Whistle, pet, treat.
+    const far = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      for (let d = 26; d > 8; d -= 1) {
+        for (let a = 0; a < 12; a++) {
+          const th = a * Math.PI / 6;
+          const x = r.x + Math.cos(th) * d, y = r.y + Math.sin(th) * d;
+          if (!s.dogBlocked(x, y)) { r.dog.x = x; r.dog.y = y; return d; }
+        }
+      }
+      return null;
+    });
+    if (far) {
+      await page.keyboard.press("c");
+      await page.waitForTimeout(300);
+      check("a whistle calls him", await page.evaluate(() => window.dogwalk.roam.recalling));
+      await page.waitForTimeout(5000);
+      const home = await page.evaluate(() => {
+        const r = window.dogwalk.roam;
+        return { gap: Math.hypot(r.x - r.dog.x, r.y - r.dog.y), recalling: r.recalling,
+                 want: !!r.dog.want, greet: !!r.greet, off: r.offLead };
+      });
+      // He settles back to following, which is a lead's length away — not on
+      // top of you. The claim is that he closed most of a 26m gap.
+      check("and he actually comes back", home.gap < far * 0.4 && !home.recalling,
+            far + "m → " + home.gap.toFixed(1) + "m " + JSON.stringify(home));
+    }
+    const atHeel = () => page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      r.greet = null; r.squirrel = null; r.recalling = false;
+      r.offLead = false; r.dog.want = null; r.dog.sniffFor = 0;
+      for (let a = 0; a < 12; a++) {
+        const th = a * Math.PI / 6;
+        const x = r.x + Math.cos(th) * 2, y = r.y + Math.sin(th) * 2;
+        if (!s.dogBlocked(x, y)) { r.dog.x = x; r.dog.y = y; return true; }
+      }
+      return false;
+    });
+    await atHeel();
+    await page.keyboard.press("f");
+    await page.waitForTimeout(300);
+    const fussed = await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      return { petted: r.petted, joy: r.joy,
+               gap: Math.hypot(r.x - r.dog.x, r.y - r.dog.y) };
+    });
+    // He trails three to four metres back, so a two-metre reach meant this
+    // button could never once be pressed. It brings him to your side instead.
+    check("you can actually reach him for a fuss",
+          fussed.petted === 1 && fussed.joy > 0, JSON.stringify(fussed));
+    await page.keyboard.press("f");
+    await page.waitForTimeout(300);
+    check("fussing has a cooldown",
+          (await page.evaluate(() => window.dogwalk.roam.petted)) === 1);
+    const joyBeforeTreats = await page.evaluate(() => window.dogwalk.roam.joy);
+    for (let i = 0; i < 7; i++) {
+      await atHeel();
+      await page.keyboard.press("t");
+      await page.waitForTimeout(300);
+    }
+    const treated = await page.evaluate(() => {
+      const r = window.dogwalk.roam;
+      return { given: r.treatsGiven, left: r.treats, joy: r.joy };
+    });
+    check("treats run out", treated.given === 5 && treated.left === 0,
+          JSON.stringify(treated));
+    // Standing on the spot pressing buttons must not out-score a real walk.
+    check("actions are a bonus, not a shortcut", treated.joy - joyBeforeTreats < 60,
+          "+" + (treated.joy - joyBeforeTreats).toFixed(0) + " joy from five treats");
+
     // Other people, out walking their own dogs. A street with nobody on it is
     // a map rather than a place.
     await page.evaluate(() => { window.dogwalk.roam.nextNpc = 0; });
@@ -562,6 +677,7 @@ async function waitForReady(page) {
           street.onPath + " of " + street.n);
     check("each has an owner, a dog and a collar", street.sprites === street.n);
 
+    await resetRoam();
     // Two dogs nose to nose: a greeting only counts while they are together
     // and you are not hauling him off.
     const beside = await page.evaluate(() => {
@@ -569,6 +685,8 @@ async function waitForReady(page) {
       let n = r.npcs.find((x) => x.temper !== "shy" && !x.met);
       if (!n) { n = s.spawnNpc(); if (n) { n.temper = "friendly"; n.met = false; } }
       if (!n) return null;
+      r.squirrel = null; r.recalling = false; r.greet = null; r.dog.want = null;
+      n.met = false;
       n.x = r.x + 2; n.y = r.y;
       n.dog.x = r.dog.x + 1.5; n.dog.y = r.dog.y;
       return { name: n.name, temper: n.temper };

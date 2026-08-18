@@ -175,8 +175,17 @@ seven hundred odd frames to offer six colours; one overlay per breed costs five.
 The choice is kept in `localStorage`, and the dog trotting on the loading screen
 is yours.
 
-`WASD` or the arrow keys, shift to jog, space to grip the lead, `E` to let him
-off it, Escape to finish. On a phone a drag is a
+`WASD` or the arrow keys, shift to jog, space to grip the lead, `C` to whistle,
+`F` for a fuss, `T` for a treat, `E` to let him off the lead, Escape to finish.
+
+Pace is set by how long the screen takes to cross, not by metres per second. At
+a realistic 2.2 m/s and sixty metres of view that was twenty-seven seconds —
+about a third of what any top-down game moves at, and it felt like wading. It is
+now 5.5 m/s across eighty-four metres of view: fifteen seconds walking, eight
+jogging. Time is compressed exactly as it already is in playback, which runs a
+walk at a sixth of real time; the metres counted are still real metres of real
+map. The camera follows tightly too — at a loose lerp it lagged behind and the
+whole thing felt mushy, which reads as slow however fast you are actually going. On a phone a drag is a
 thumbstick that anchors wherever you put your thumb down, rather than panning
 the camera — panning away from yourself mid-walk is not something you want, and
 a stick parked in a corner is not something you can reach.
@@ -227,6 +236,16 @@ something at every single step, the lead is permanently taut, and the choice you
 are supposed to be making stops being a choice. Thinned out, a walk gets a
 rhythm: a stretch of plain walking, then something worth stopping for.
 
+**Whistle, fuss, treat.** A whistle brings him back from anywhere — off the
+lead, mid-sniff, or forty metres away after a squirrel — and is the one control
+that always works. A fuss and a treat both need him within reach, and bring him
+to your side to get it, which is what "come here, you" actually looks like; an
+arm's-length reach meant he was never once close enough, because he trails three
+to four metres back by design. Five treats to a walk, and he is delighted by the
+first half-dozen fusses and fairly indifferent after that — between them they
+come to about seventy joy against the hundred-odd a kilometre of decent sniffing
+earns, so standing on the spot pressing buttons cannot out-score a walk.
+
 **Squirrels.** Every half-minute or so one bolts past. He is after it instantly
 and you have about a second to grip the lead — hold space, or the button that
 appears. Grip it and he strains but stays. Miss it and he slips the lead and is
@@ -239,6 +258,10 @@ where that works, otherwise whichever turn does, which is enough to send them
 round corners and along the fronts of the houses without a graph to follow —
 and are recycled when you leave them behind. Each has a randomly chosen owner,
 breed, coat, collar, name and temperament.
+
+Somebody whose dog is about to say hello slows and waits, the way people do —
+without that they carry on at walking pace and the two dogs are ten metres apart
+a second later, and you would have to outrun a stranger to get a greeting.
 
 Bring your dog close to theirs and the two of them stop for a sniff while the
 owner says something. The lead still applies: the greeting only counts while
