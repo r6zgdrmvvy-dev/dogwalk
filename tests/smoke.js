@@ -920,6 +920,85 @@ async function waitForReady(page) {
     check("where you walked is remembered", after.roamed > 0 && after.saved === after.roamed,
           JSON.stringify(after));
 
+    // Lighting. The map knows where every real lamp post and building front is,
+    // so after dark the street is lit by its own lamps and windows.
+    const lit = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), w = s.worldRef;
+      const at = (h, c) => {
+        s.setTimeOfDay("2026-08-17T" + h + ":30:00Z", c);
+        s.updateLights();
+        return { night: s.lightLevel,
+                 on: (s.lightPool || []).filter((l) => l.visible).length };
+      };
+      const noon = at("12", 15), night = at("22", 40);
+      const glowDepth = (s.lightPool || []).length ? s.lightPool[0].depth : 0;
+      return { total: w.lights.length, noon, night, glowDepth,
+               gradeDepth: s.grade.depth };
+    });
+    check("the map is full of real lights", lit.total > 50, lit.total + " lamps and windows");
+    check("nothing is lit at midday", lit.noon.on === 0, JSON.stringify(lit.noon));
+    check("the street lights up after dark", lit.night.on > 0 && lit.night.night > 0.8,
+          JSON.stringify(lit.night));
+    // The grade multiplies the whole scene down towards night; a light drawn
+    // under it is just a slightly less dark patch.
+    check("lights sit above the darkness, not under it",
+          lit.glowDepth > lit.gradeDepth, lit.glowDepth + " vs grade " + lit.gradeDepth);
+
+    // Wet tarmac. A lamp on a rainy night smears down the road.
+    const wet = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world");
+      s.setTimeOfDay("2026-08-17T22:30:00Z", 80);
+      s.wetness = 0; s.updateLights();
+      const dry = (s.wetPool || []).filter((l) => l.visible).length;
+      const lampsDry = (s.lightPool || []).filter((l) => l.visible).length;
+      s.wetness = 1; s.updateLights();
+      const rain = (s.wetPool || []).filter((l) => l.visible).length;
+      const lampsWet = (s.lightPool || []).filter((l) => l.visible).length;
+      return { dry, rain, lampsDry, lampsWet };
+    });
+    check("rain puts reflections on the road", wet.rain > 0 && wet.dry === 0,
+          wet.dry + " dry → " + wet.rain + " wet");
+    // Reflections used to share the lamps' budget, so rain halved the number
+    // of street lights you could see.
+    check("reflections do not cost you lamps", wet.lampsWet === wet.lampsDry,
+          wet.lampsDry + " → " + wet.lampsWet);
+
+    // A sprite with no shadow reads as pasted onto the tiles rather than
+    // standing on them.
+    const blobs = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world");
+      s.updateContactShadows();
+      const on = (s.blobs || []).filter((b) => b.visible);
+      // Under the dog, not beside him.
+      const near = on.filter((b) =>
+        Math.hypot(b.x - s.dog.x, b.y - s.dog.y) < s.worldScale * 2).length;
+      return { on: on.length, underDog: near };
+    });
+    check("what is on screen has a shadow under it",
+          blobs.on >= 1 && blobs.underDog >= 1, JSON.stringify(blobs));
+
+    // Foliage moving in the wind the archive actually recorded.
+    const sway = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world");
+      // Zoomed in: pulled back to the whole map a tree is two pixels and its
+      // sway is deliberately switched off.
+      s.cameras.main.setZoom(s.fitZoom * 4);
+      s.windKmh = 40; s.swayTrees(1000);
+      const windy = s.treeGroup.getChildren().filter((t) => t.rotation !== 0).length;
+      s.windKmh = 0; s.swayTrees(1200);
+      const calm = s.treeGroup.getChildren().filter((t) => t.rotation !== 0).length;
+      s.windKmh = 40;
+      s.cameras.main.setZoom(s.fitZoom);
+      s.swayTrees(1400);
+      const zoomedOut = s.treeGroup.getChildren().filter((t) => t.rotation !== 0).length;
+      s.cameras.main.setZoom(s.fitZoom);
+      return { windy, calm, zoomedOut };
+    });
+    check("trees move in a wind and stand still without one",
+          sway.windy > 0 && sway.calm === 0, JSON.stringify(sway));
+    check("and are left alone at map zoom, where nobody could see it",
+          sway.zoomedOut === 0, sway.zoomedOut);
+
     // Racing a walk he really did. The ghost follows the routed line at eight
     // times his own pace, which lands between your walk and your jog.
     check("every walk offers a race", await page.evaluate(() =>

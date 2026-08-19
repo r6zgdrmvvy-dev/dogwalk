@@ -2371,6 +2371,32 @@
       }
     }
 
+    // Every light on the street, so that after dark the place is lit by its own
+    // lamp posts and front windows rather than by a flat wash. All of it is
+    // real: the lamps are where the street furniture went, and a lit window is
+    // a front elevation of a building that is actually there.
+    var lights = [];
+    props.forEach(function (p) {
+      if (p.t === PROP.lamp) {
+        // Sodium orange, and the pool falls on the road the arm reaches over.
+        var ox = p.r === 0 ? 2.5 : (p.r === Math.PI ? -2.5 : 0);
+        var oy = p.r === Math.PI / 2 ? 2.5 : (p.r === -Math.PI / 2 ? -2.5 : 0);
+        lights.push({ x: p.x + ox, y: p.y + oy, r: 11, c: 0xffb457, i: 0.46 });
+      }
+    });
+    for (var wl = 0; wl < cols * rows; wl++) {
+      if (wallMask[wl] < 0) continue;
+      // Not every window has somebody in. A third of them, picked by position
+      // so the same houses are lit each time you come back rather than the
+      // street flickering on and off as the world rebuilds.
+      var wx4 = wl % cols, wy4 = (wl / cols) | 0;
+      if (Math.abs((wx4 * 92837111) ^ (wy4 * 689287499)) % 100 > 34) continue;
+      var warm = wallType[wl] === BT.shop ? 0xfff0c8 : 0xffd79a;
+      lights.push({ x: (wx4 + 0.5) * mpt, y: (wy4 + 0.9) * mpt,
+                    r: wallType[wl] === BT.shop ? 8 : 5.5,
+                    c: warm, i: wallType[wl] === BT.shop ? 0.34 : 0.24 });
+    }
+
     var seen = new Uint8Array(cols * rows);
     computeSeen(seen);
 
@@ -2385,7 +2411,7 @@
 
     world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen,
               trees: trees, props: props, shadow: shadow, vis: VIS,
-              solid: solid, kind: kindMap, park: parkMap,
+              solid: solid, kind: kindMap, park: parkMap, lights: lights,
               toM: toM, fromM: fromM, widthM: widthM, heightM: heightM,
               recomputeSeen: function () { computeSeen(seen); } };
     window.__world = world;
@@ -2778,6 +2804,11 @@
       lg.generateTexture("litter", 3, 2); lg.destroy();
 
       this.makeCloudTexture();
+      this.makeGlowTexture();
+      this.makeBlobTexture();
+      this.lightLevel = 0;
+      this.windKmh = 0;
+      this.wetness = 0;
       this.clouds = this.add.tileSprite(0, 0, 16, 16, "cloudshadow")
         .setOrigin(0).setDepth(398000)
         .setBlendMode(Phaser.BlendModes.MULTIPLY)
@@ -2822,6 +2853,182 @@
         this.dogCollar = this.add.sprite(0, 0, "dogs").setOrigin(0.5, 0.5).setVisible(false);
       }
       this.dogCollar.setFrame(collarFrame(type)).setTint(collarHex(state.dogCollar));
+    }
+
+    // A soft dark ellipse under anything standing on the ground. Without one a
+    // sprite reads as pasted onto the tiles rather than standing on them; it is
+    // the cheapest thing you can do for how much it buys.
+    makeBlobTexture() {
+      if (this.textures.exists("blob")) return;
+      var S = 64, tex = this.textures.createCanvas("blob", S, S);
+      var ctx = tex.getContext();
+      var g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      g.addColorStop(0, "rgba(12,14,20,0.5)");
+      g.addColorStop(0.55, "rgba(12,14,20,0.26)");
+      g.addColorStop(1, "rgba(12,14,20,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, S, S);
+      tex.refresh();
+    }
+
+    // One per moving thing, kept glued underneath it. Squashed, because a
+    // shadow on flat ground is an ellipse, and offset south-east to agree with
+    // the light the whole tileset is drawn under.
+    updateContactShadows() {
+      this.blobs = this.blobs || [];
+      var scale = this.worldScale || 1, k = 0;
+      var self = this;
+      var put = function (spr, wide) {
+        if (!spr || !spr.visible) return;
+        var b = self.blobs[k];
+        if (!b) {
+          b = self.add.image(0, 0, "blob").setOrigin(0.5).setDepth(99980);
+          self.blobs.push(b);
+        }
+        b.setVisible(true)
+         .setPosition(spr.x + scale * 0.35, spr.y + scale * 0.5)
+         .setDisplaySize(wide * scale, wide * scale * 0.55);
+        k++;
+      };
+      put(this.walker, 1.5);
+      put(this.dog, 1.7);
+      put(this.critter, 1.0);
+      (roam.npcs || []).forEach(function (n) {
+        if (!n.spr) return;
+        put(n.spr.owner, 1.5);
+        put(n.spr.dog, 1.7);
+      });
+      for (var j = k; j < this.blobs.length; j++) this.blobs[j].setVisible(false);
+    }
+
+    // Foliage moving in the wind that the archive actually recorded. A still
+    // tree in a gale is the sort of thing you do not consciously notice and
+    // still read as dead.
+    swayTrees(time) {
+      if (!this.treeGroup) return;
+      var gust = Math.max(0, Math.min(1, (this.windKmh || 0) / 45));
+      // Pulled back to the whole map, a tree is two pixels and its sway is
+      // invisible — so there is no sense rotating three thousand of them.
+      if (this.cameras.main.zoom < (this.fitZoom || 0) * 2.5) gust = 0;
+      if (gust < 0.05) {
+        if (this.swaying) {
+          this.treeGroup.getChildren().forEach(function (t) { t.setRotation(0); });
+          this.swaying = false;
+        }
+        return;
+      }
+      this.swaying = true;
+      var amp = 0.02 + gust * 0.075;
+      var kids = this.treeGroup.getChildren();
+      // Only the ones on screen. A town is five thousand trees and rotating the
+      // ones half a mile behind you is work nobody sees.
+      var v = this.cameras.main.worldView, pad = 40;
+      for (var i = 0; i < kids.length; i++) {
+        var t = kids[i];
+        if (!t.visible) continue;
+        if (t.x < v.x - pad || t.x > v.right + pad ||
+            t.y < v.y - pad || t.y > v.bottom + pad) continue;
+        // Each tree on its own phase, off its position, so a row of them
+        // ripples rather than nodding in unison like a stadium crowd.
+        var ph = (t.x * 0.013 + t.y * 0.021);
+        t.setRotation(Math.sin(time * 0.0022 * (1 + gust) + ph) * amp);
+      }
+    }
+
+    // ---------- lights after dark ----------
+
+    // One soft radial blob, drawn once and tinted per light. Additive, and
+    // above the time-of-day grade rather than under it: the grade multiplies
+    // the whole scene down towards night, and a light has to punch back up
+    // through that or it is just a slightly less dark patch.
+    makeGlowTexture() {
+      if (this.textures.exists("glow")) return;
+      var S = 128, tex = this.textures.createCanvas("glow", S, S);
+      var ctx = tex.getContext();
+      var g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+      // Falls off fast at first and then long and low, which is what a lamp on
+      // a wet pavement actually does. A plain linear ramp reads as a sticker.
+      // No saturated core. Additive light that reaches full white in the
+      // middle stops looking like a lamp and starts looking like lens flare,
+      // and two of them overlapping blow out to a white hole.
+      g.addColorStop(0, "rgba(255,255,255,0.52)");
+      g.addColorStop(0.22, "rgba(255,255,255,0.34)");
+      g.addColorStop(0.5, "rgba(255,255,255,0.15)");
+      g.addColorStop(0.78, "rgba(255,255,255,0.045)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, S, S);
+      tex.refresh();
+    }
+
+    // How dark it is, 0 in the middle of the day and 1 in the small hours.
+    // Taken off the same hour the grade uses so the two never disagree.
+    nightness(iso, cloud) {
+      var h = iso ? new Date(iso).getHours() + new Date(iso).getMinutes() / 60 : 12;
+      var n;
+      if (h < 5) n = 1;
+      else if (h < 8) n = 1 - (h - 5) / 3;
+      else if (h < 16.5) n = 0;
+      else if (h < 21) n = (h - 16.5) / 4.5;
+      else n = 1;
+      // Heavy cloud brings the lights on early, which is very Glasgow.
+      if (typeof cloud === "number") n = Math.min(1, n + (cloud / 100) * 0.18);
+      return n;
+    }
+
+    // Only the lights you could actually see, and only after dark. Sprites are
+    // pooled: a town has thousands of windows and there is no sense holding a
+    // sprite for the ones half a mile behind you.
+    updateLights() {
+      var w = this.worldRef;
+      if (!w || !w.lights) return;
+      this.lightPool = this.lightPool || [];
+      this.wetPool = this.wetPool || [];
+      var n = this.lightLevel || 0;
+      if (n < 0.04) {
+        for (var q = 0; q < this.lightPool.length; q++) this.lightPool[q].setVisible(false);
+        for (var q2 = 0; q2 < this.wetPool.length; q2++) this.wetPool[q2].setVisible(false);
+        return;
+      }
+      var wetUsed = 0;
+      var v = this.cameras.main.worldView, scale = this.worldScale;
+      var pad = 60 * scale;
+      var used = 0, MAXL = 90;
+      for (var i = 0; i < w.lights.length && used < MAXL; i++) {
+        var L = w.lights[i];
+        var sx = L.x * scale, sy = L.y * scale;
+        if (sx < v.x - pad || sx > v.right + pad || sy < v.y - pad || sy > v.bottom + pad) continue;
+        var spr = this.lightPool[used];
+        if (!spr) {
+          spr = this.add.image(0, 0, "glow").setOrigin(0.5)
+            .setBlendMode(Phaser.BlendModes.ADD).setDepth(400500);
+          this.lightPool.push(spr);
+        }
+        var d = L.r * 2 * scale;
+        spr.setVisible(true).setPosition(sx, sy).setDisplaySize(d, d)
+           .setTint(L.c).setAlpha(L.i * n);
+        used++;
+
+        // Wet tarmac. A lamp on a rainy night smears a long way down the road,
+        // which is most of what a Glasgow street looks like after dark — so the
+        // reflection is a second, dimmer copy stretched along the ground.
+        // Its own pool, not the lamps' one: sharing the budget meant rain
+        // halved the number of lamps you could see, which is backwards.
+        if (this.wetness > 0.05) {
+          var wet = this.wetPool[wetUsed];
+          if (!wet) {
+            wet = this.add.image(0, 0, "glow").setOrigin(0.5)
+              .setBlendMode(Phaser.BlendModes.ADD).setDepth(400400);
+            this.wetPool.push(wet);
+          }
+          wet.setVisible(true).setPosition(sx, sy + d * 0.42)
+             .setDisplaySize(d * 0.42, d * 1.5)
+             .setTint(L.c).setAlpha(L.i * n * this.wetness * 0.55);
+          wetUsed++;
+        }
+      }
+      for (var j = used; j < this.lightPool.length; j++) this.lightPool[j].setVisible(false);
+      for (var j2 = wetUsed; j2 < this.wetPool.length; j2++) this.wetPool[j2].setVisible(false);
     }
 
     // Broken cloud, seen from underneath: soft patches that darken the ground
@@ -2918,6 +3125,7 @@
         tint = mixHex(tint, 0x9aa2ae, f);
       }
       this.grade.fillColor = tint;
+      this.lightLevel = this.nightness(iso, cloud);
     }
 
     // Everything the hour's readings can be seen doing: falling precipitation
@@ -2934,6 +3142,12 @@
     setWeather(mm, temp, wind, cloud) {
       var cam = this.cameras.main, z = cam.zoom || 1, v = cam.worldView;
       wind = typeof wind === "number" ? wind : 0;
+      this.windKmh = wind;
+      // The road stays wet for a while after it stops, so this eases rather
+      // than switching off with the last drop.
+      var want = Math.max(0, Math.min(1, mm / 1.5));
+      this.wetness = this.wetness === undefined ? want
+                   : this.wetness + (want - this.wetness) * 0.02;
       // Below about a degree and a half the same millimetre of precipitation
       // falls as snow, which behaves nothing like rain: slower, wandering, and
       // it does not streak.
@@ -4709,6 +4923,9 @@
 
     update(time, delta) {
       this.fitOverlays(delta);
+      this.updateLights();
+      this.updateContactShadows();
+      this.swayTrees(time);
       this.handlePinch();
       if (roam.on) { this.updateRoam(delta); return; }
       if (!pb.playing || !pb.walk) return;

@@ -476,6 +476,7 @@ pip install pillow
 python3 scripts/make_tiles.py
 ```
 
+
 The palette gives each material five values, hue-shifted so shadows drift blue
 and highlights drift warm, and texture comes from ordered dithering between
 neighbouring steps rather than random noise — which is what keeps a small
@@ -516,6 +517,40 @@ An earlier build of this used Kenney's
 [Tiny Town](https://kenney.nl/assets/tiny-town) pack (CC0); it has been removed
 now that everything is generated, but the licence text stays in
 `ASSETS-LICENSE.txt` for the record.
+
+### Light
+
+After dark the street is lit by its own street lamps and front windows. Both
+are real: the lamps are where the street furniture actually went, and a lit
+window is the front elevation of a building that is genuinely there — about a
+hundred and fifty of them in a typical world, of which a third of the windows
+have somebody in, picked by position so the same houses are lit each time you
+come back rather than the street flickering as the world rebuilds.
+
+The glow is additive and drawn *above* the time-of-day grade, not under it. The
+grade multiplies the whole scene down towards night, so a light beneath it is
+only a slightly less dark patch. The falloff is fast then long and low, the way
+a lamp on a pavement behaves, and there is deliberately no saturated core —
+additive light that reaches white in the middle stops reading as a lamp and
+starts reading as lens flare, and two overlapping blow out to a white hole.
+
+Rain puts the lamps back on the road: a second, dimmer copy stretched along the
+ground, easing in and out so the tarmac stays wet for a while after it stops.
+They have their own budget rather than sharing the lamps' — sharing it meant
+rain halved the number of street lights you could see, which is backwards.
+
+Heavy cloud brings the lights on early, which is very Glasgow.
+
+Everything that stands on the ground gets a soft contact shadow under it,
+offset south-east to agree with the light the whole tileset is drawn under.
+Without one a sprite reads as pasted onto the tiles rather than standing on
+them; it is the cheapest thing available for how much it buys.
+
+Trees sway in whatever wind the archive recorded for that hour, each on its own
+phase off its position so a row of them ripples rather than nodding in unison.
+Only the ones on screen, and only when you are zoomed in far enough to see it —
+pulled back to the whole map a tree is two pixels and rotating three thousand of
+them is work nobody can see.
 
 ## Tests
 
