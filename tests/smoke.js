@@ -1185,6 +1185,114 @@ async function waitForReady(page) {
     check("and are left alone at map zoom, where nobody could see it",
           sway.zoomedOut === 0, sway.zoomedOut);
 
+    // Traffic. Lanes are the middle of the road, which is the one strip of
+    // tarmac the parked cars can never be on — the parking requires a pavement
+    // tile alongside, and a lane requires carriageway on both sides.
+    const lanes = await page.evaluate(() => {
+      const w = window.__world;
+      const off = w.lanes.filter((l) => {
+        const tx = Math.floor((l.h ? l.a : l.fixed) / w.mpt);
+        const ty = Math.floor((l.h ? l.fixed : l.a) / w.mpt);
+        return w.kind[ty * w.cols + tx] !== 1;
+      }).length;
+      return { n: w.lanes.length, offRoad: off,
+               dirs: w.lanes.map((l) => l.dir).filter((d) => d === 1 || d === -1).length };
+    });
+    check("the map knows where the road runs", lanes.n > 0, JSON.stringify(lanes));
+    check("every lane is on the carriageway", lanes.offRoad === 0, JSON.stringify(lanes));
+    check("and every one of them flows one way or the other",
+          lanes.dirs === lanes.n, JSON.stringify(lanes));
+
+    const traffic = await page.evaluate(async () => {
+      const s = window.game.scene.getScene("world"), w = s.worldRef;
+      // Look at a road, rather than at wherever the last check left the camera.
+      const lane = w.lanes[0], mid = (lane.a + lane.b) / 2;
+      s.cameras.main.stopFollow();
+      s.cameras.main.centerOn((lane.h ? mid : lane.fixed) * s.worldScale,
+                              (lane.h ? lane.fixed : mid) * s.worldScale);
+      await new Promise((go) => setTimeout(go, 9000));
+      const cars = s.cars || [];
+      const before = cars.map((c) => c.at);
+      await new Promise((go) => setTimeout(go, 700));
+      const moved = (s.cars || []).filter((c, i) =>
+        before[i] !== undefined && Math.abs(c.at - before[i]) > 0.5).length;
+      const onRoad = (s.cars || []).filter((c) => {
+        const tx = Math.floor(c.x / w.mpt), ty = Math.floor(c.y / w.mpt);
+        return w.kind[ty * w.cols + tx] === 1;
+      }).length;
+      return { n: cars.length, moved, onRoad };
+    });
+    check("there is traffic, and it is going somewhere",
+          traffic.n > 0 && traffic.moved > 0, JSON.stringify(traffic));
+    check("it stays on the road", traffic.onRoad === traffic.n, JSON.stringify(traffic));
+
+    // A car driving straight through you would undo every other thing on the
+    // list. Nothing makes the carriageway solid, so it has to stop instead.
+    check("a car stops for you rather than driving through you",
+          await page.evaluate(() => {
+            const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+            const c = (s.cars || [])[0];
+            if (!c) return true;
+            const was = r.on;
+            r.on = true;
+            // Stand in the road four metres in front of it.
+            const ax = c.lane.h ? c.dir : 0, ay = c.lane.h ? 0 : c.dir;
+            const ox = r.x, oy = r.y, dx = r.dog.x, dy = r.dog.y;
+            r.x = c.x + ax * 4; r.y = c.y + ay * 4;
+            r.dog.x = r.x; r.dog.y = r.y;
+            const blocked = !s.roadClear(c);
+            r.x = c.x - ax * 40; r.y = c.y - ay * 40;
+            r.dog.x = r.x; r.dog.y = r.y;
+            const clear = s.roadClear(c);
+            r.x = ox; r.y = oy; r.dog.x = dx; r.dog.y = dy; r.on = was;
+            return blocked && clear;
+          }));
+
+    // Headlights come on with the same darkness the street lamps use, so the
+    // whole street lights up together.
+    const beams = await page.evaluate(async () => {
+      const s = window.game.scene.getScene("world");
+      const lit = () => (s.cars || []).filter((c) => c.beam && c.beam.visible).length;
+      s.setTimeOfDay("2026-08-17T12:30:00Z", 15);
+      await new Promise((go) => setTimeout(go, 250));
+      const day = lit();
+      s.setTimeOfDay("2026-08-17T22:30:00Z", 40);
+      await new Promise((go) => setTimeout(go, 250));
+      return { day, night: lit(), cars: (s.cars || []).length };
+    });
+    check("cars put their lights on after dark, and not before",
+          beams.cars === 0 || (beams.day === 0 && beams.night > 0),
+          JSON.stringify(beams));
+
+    // Still water is the one thing on the map with no reason to be still.
+    const ripple = await page.evaluate(async () => {
+      const s = window.game.scene.getScene("world");
+      // The fixture town is landlocked, so put a pond in it: the thing under
+      // test is the cycling, not whether this particular map has a canal.
+      if (!s.waterTiles || !s.waterTiles.length) {
+        s.waterTiles = [];
+        for (let i = 0; i < 4; i++) {
+          const t = s.layer.getTileAt(4 + i, 4);
+          if (!t) continue;
+          t.index = 21;
+          s.waterTiles.push({ x: t.x, y: t.y });
+        }
+        s.waterPhase = -1;
+        if (!s.waterTiles.length) return { none: true };
+      }
+      const read = () => {
+        const t = s.layer.getTileAt(s.waterTiles[0].x, s.waterTiles[0].y);
+        return t ? t.index : -1;
+      };
+      const seen = {};
+      for (let i = 0; i < 20; i++) {
+        seen[read()] = 1;
+        await new Promise((go) => setTimeout(go, 90));
+      }
+      return { frames: Object.keys(seen).length, tiles: s.waterTiles.length };
+    });
+    check("water moves", ripple.none === true || ripple.frames > 1, JSON.stringify(ripple));
+
     // Racing a walk he really did. The ghost follows the routed line at eight
     // times his own pace, which lands between your walk and your jog.
     check("every walk offers a race", await page.evaluate(() =>

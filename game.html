@@ -1441,6 +1441,10 @@
     // Kerbs are directional: the tarmac side of the tile faces the road.
     kerbN: 12, kerbS: 13, kerbW: 14, kerbE: 15,
     grass: 16, grassFlower: 17, waste: 18, hedge: 19, dirt: 20, water: 21,
+    // Water is four phases cycled at runtime. The other three live on the end
+    // of the sheet rather than beside the first, so every index after `water`
+    // keeps the number it has always had.
+    waterFrames: [21, 66, 67, 68],
     trees: [22, 23, 24, 25],
     // Each roof colour is five tiles: interior, then a gutter edge facing
     // north / south / west / east, so a roofline reads as a roofline.
@@ -2428,6 +2432,56 @@
                     c: warm, i: wallType[wl] === BT.shop ? 0.34 : 0.24 });
     }
 
+    // Lanes for live traffic. Only carriageway tiles with carriageway on both
+    // sides of them, which is exactly the run of road a parked car can never be
+    // on — the parking above requires a pavement tile alongside. So a moving
+    // car is guaranteed a clear lane without any of them having to know about
+    // each other. Residential roads come out three tiles wide, so this is the
+    // middle of the road; the wider classes get a lane each side of it.
+    var lanes = [];
+    var laneRun = function (h, fixed, a, b) {
+      if (b - a < 11) return;                 // too short to be worth a car
+      // Which way it flows. Drive on the left: more road to the south of you
+      // means you are on the north side, and the north side of an east-west
+      // road runs west. Down the exact middle of a three-wide street it is
+      // decided by position, so a given street always flows the same way.
+      var before = 0, after = 0;
+      for (var s = 1; s <= 3; s++) {
+        var mid = (a + b) >> 1;
+        var iA = h ? (fixed - s) * cols + mid : mid * cols + (fixed - s);
+        var iB = h ? (fixed + s) * cols + mid : mid * cols + (fixed + s);
+        if (iA >= 0 && kindMap[iA] === 1) before++;
+        if (iB < cols * rows && kindMap[iB] === 1) after++;
+      }
+      var dir = before === after
+        ? (Math.abs((fixed * 7919) ^ (a * 104729)) % 2 ? 1 : -1)
+        : (after > before ? -1 : 1);
+      lanes.push({ h: h, fixed: (fixed + 0.5) * mpt,
+                   a: (a + 0.5) * mpt, b: (b + 0.5) * mpt, dir: dir });
+    };
+    for (var ly = 1; ly < rows - 1; ly++) {
+      var runA = -1;
+      for (var lx = 0; lx < cols; lx++) {
+        var li = ly * cols + lx;
+        var open = kindMap[li] === 1 &&
+                   kindMap[li - cols] === 1 && kindMap[li + cols] === 1;
+        if (open) { if (runA < 0) runA = lx; }
+        else { if (runA >= 0) laneRun(true, ly, runA, lx - 1); runA = -1; }
+      }
+      if (runA >= 0) laneRun(true, ly, runA, cols - 1);
+    }
+    for (var lx2 = 1; lx2 < cols - 1; lx2++) {
+      var runB = -1;
+      for (var ly2 = 0; ly2 < rows; ly2++) {
+        var li2 = ly2 * cols + lx2;
+        var open2 = kindMap[li2] === 1 &&
+                    kindMap[li2 - 1] === 1 && kindMap[li2 + 1] === 1;
+        if (open2) { if (runB < 0) runB = ly2; }
+        else { if (runB >= 0) laneRun(false, lx2, runB, ly2 - 1); runB = -1; }
+      }
+      if (runB >= 0) laneRun(false, lx2, runB, rows - 1);
+    }
+
     var seen = new Uint8Array(cols * rows);
     computeSeen(seen);
 
@@ -2443,6 +2497,7 @@
     world = { cols: cols, rows: rows, mpt: mpt, data: data, labels: labels, seen: seen,
               trees: trees, props: props, shadow: shadow, vis: VIS,
               solid: solid, kind: kindMap, park: parkMap, lights: lights,
+              lanes: lanes,
               toM: toM, fromM: fromM, widthM: widthM, heightM: heightM,
               recomputeSeen: function () { computeSeen(seen); } };
     window.__world = world;
@@ -2713,6 +2768,18 @@
   var BIN_M = 3.0;                           // near enough to drop it in
   var BAG_WINDOW = 22;                       // seconds before you have walked off
   var BAG_JOY = 6, BIN_JOY = 10, LEFT_PENALTY = 14;
+
+  // Traffic. A street with nothing moving on it is a diorama; one car a minute
+  // going past is a town. Kept deliberately sparse — this is a game about
+  // walking a dog, and a busy dual carriageway outside the front door is not
+  // the feeling — and only ever on the middle of the road, which is the one
+  // strip of tarmac the parked cars are never on.
+  var TRAFFIC_MAX = 5;                       // on screen at once, at most
+  var CAR_EVERY = [2.0, 7.0];                // seconds between one arriving
+  var CAR_SPEED = [7.5, 11.5];               // m/s, random per car
+  var CAR_GAP_M = 34;                        // nose to tail on the same lane
+  var CAR_SEE_M = 190;                       // spawn and despawn radius
+  var HEADLIGHT_ON = 0.35;                   // darkness above which they come on
 
   // Fetch. A ball goes in your pocket at the start of every walk, and it only
   // comes out when he is off the lead — a dog on a two-metre lead cannot fetch
@@ -3197,6 +3264,160 @@
       for (var j2 = wetUsed; j2 < this.wetPool.length; j2++) this.wetPool[j2].setVisible(false);
     }
 
+    // ---------- traffic ----------
+    // Cars going about their business on the middle of the road, with their
+    // lights on after dark. Sparse on purpose: one going past every so often is
+    // a town, a steady stream is a motorway, and this is a game about walking a
+    // dog. The lanes were worked out when the world was built, so nothing here
+    // has to look at the map — a car drives its lane until it runs out of it.
+    updateTraffic(dt, scale) {
+      var w = this.worldRef;
+      if (!w || !w.lanes || !w.lanes.length) return;
+      this.cars = this.cars || [];
+      var cam = this.cameras.main, v = cam.worldView;
+      var cx = (v.x + v.width / 2) / scale, cy = (v.y + v.height / 2) / scale;
+      // How far out to bother. Walking, that is a couple of streets; pulled
+      // back to the whole map it has to be the whole map, or cars pop in and
+      // out well inside the frame you are looking at.
+      var see = Math.max(CAR_SEE_M, (v.width / scale) * 0.75);
+
+      // Retire the ones that have run out of road or out of sight.
+      for (var i = this.cars.length - 1; i >= 0; i--) {
+        var c = this.cars[i];
+        // Anything in the road ahead and it stops. You are allowed to walk in
+        // the road — nothing here makes the carriageway solid — and a car
+        // driving straight through the pair of you would undo every other
+        // thing on this list.
+        c.at += c.v * c.dir * dt * (this.roadClear(c) ? 1 : 0);
+        var past = c.dir > 0 ? c.at > c.lane.b : c.at < c.lane.a;
+        var mx = c.lane.h ? c.at : c.lane.fixed;
+        var my = c.lane.h ? c.lane.fixed : c.at;
+        if (past || Math.hypot(mx - cx, my - cy) > see * 1.35) {
+          c.spr.setVisible(false);
+          if (c.beam) c.beam.setVisible(false);
+          if (c.tail) c.tail.setVisible(false);
+          this.carPool = this.carPool || [];
+          this.carPool.push(c);
+          this.cars.splice(i, 1);
+          continue;
+        }
+        c.x = mx; c.y = my;
+      }
+
+      // They arrive one at a time with a gap between. Filling the quota on the
+      // first frame gives you a convoy rather than a street with cars on it.
+      this.nextCar = (this.nextCar === undefined ? 0 : this.nextCar) - dt;
+      if (this.nextCar <= 0 && this.cars.length < TRAFFIC_MAX) {
+        this.spawnCar(cx, cy, see);
+        this.nextCar = CAR_EVERY[0] + Math.random() * (CAR_EVERY[1] - CAR_EVERY[0]);
+      }
+
+      // Headlights: a hard white cone thrown down the road ahead and a red
+      // smudge behind, both fading in with the same darkness the street lamps
+      // use so the whole street comes on together.
+      var night = Math.max(0, (this.lightLevel || 0) - HEADLIGHT_ON) / (1 - HEADLIGHT_ON);
+      for (var j = 0; j < this.cars.length; j++) {
+        var car = this.cars[j];
+        var sx = car.x * scale, sy = car.y * scale;
+        car.spr.setVisible(true).setPosition(sx, sy).setDepth(sy - 0.4);
+        if (!car.beam) continue;
+        if (night <= 0.02) { car.beam.setVisible(false); car.tail.setVisible(false); continue; }
+        var ax = car.lane.h ? car.dir : 0, ay = car.lane.h ? 0 : car.dir;
+        var lead = 7.5 * scale, back = 2.4 * scale;
+        car.beam.setVisible(true)
+          .setPosition(sx + ax * lead, sy + ay * lead)
+          .setDisplaySize(car.lane.h ? 20 * scale : 9 * scale,
+                          car.lane.h ? 9 * scale : 20 * scale)
+          .setAlpha(0.5 * night);
+        car.tail.setVisible(true)
+          .setPosition(sx - ax * back, sy - ay * back)
+          .setDisplaySize(5 * scale, 5 * scale)
+          .setAlpha(0.42 * night);
+      }
+    }
+
+    // Ten metres of clear road in front of it, and a lane's width either side.
+    roadClear(c) {
+      if (!roam.on) return true;
+      var lane = c.lane;
+      var here = [[roam.x, roam.y], [roam.dog.x, roam.dog.y]];
+      for (var i = 0; i < here.length; i++) {
+        var ox = here[i][0] - c.x, oy = here[i][1] - c.y;
+        var along = lane.h ? ox * c.dir : oy * c.dir;
+        var across = lane.h ? oy : ox;
+        if (along > -1.5 && along < 10 && Math.abs(across) < 2.2) return false;
+      }
+      return true;
+    }
+
+    spawnCar(cx, cy, see) {
+      var w = this.worldRef, scale = this.worldScale;
+      // A lane that is near you and has room at its upstream end. Sampled a
+      // handful of times rather than searched: the map has thousands of lanes
+      // and this runs every time a car retires.
+      for (var t = 0; t < 12; t++) {
+        var lane = w.lanes[(Math.random() * w.lanes.length) | 0];
+        var mid = (lane.a + lane.b) / 2;
+        var lx = lane.h ? mid : lane.fixed, ly = lane.h ? lane.fixed : mid;
+        if (Math.hypot(lx - cx, ly - cy) > (see || CAR_SEE_M)) continue;
+        // In at the upstream end, so it drives towards you rather than
+        // appearing in front of you already halfway down the street.
+        var at = lane.dir > 0 ? lane.a : lane.b;
+        var clear = true;
+        for (var k = 0; k < this.cars.length; k++) {
+          var o = this.cars[k];
+          if (o.lane === lane && Math.abs(o.at - at) < CAR_GAP_M) { clear = false; break; }
+        }
+        if (!clear) continue;
+
+        this.carPool = this.carPool || [];
+        var car = this.carPool.pop();
+        if (!car) {
+          car = {
+            spr: this.add.image(0, 0, "props", 0).setOrigin(0.5),
+            beam: this.add.image(0, 0, "glow").setOrigin(0.5)
+              .setBlendMode(Phaser.BlendModes.ADD).setDepth(400450),
+            tail: this.add.image(0, 0, "glow").setOrigin(0.5)
+              .setBlendMode(Phaser.BlendModes.ADD).setDepth(400450)
+          };
+        }
+        var pal = lane.h ? PROP.carEW : PROP.carNS;
+        // The sheet draws one car going one way; the other way is the same car
+        // mirrored, which is free and reads exactly right from above.
+        car.spr.setTexture("props", pal[(Math.random() * pal.length) | 0])
+               .setRotation(0).setVisible(true)
+               .setFlipX(lane.h && lane.dir < 0)
+               .setFlipY(!lane.h && lane.dir < 0);
+        car.beam.setTint(0xfff4d2);
+        car.tail.setTint(0xff3a22);
+        car.lane = lane; car.at = at; car.dir = lane.dir;
+        car.v = CAR_SPEED[0] + Math.random() * (CAR_SPEED[1] - CAR_SPEED[0]);
+        car.x = lane.h ? at : lane.fixed;
+        car.y = lane.h ? lane.fixed : at;
+        car.spr.setPosition(car.x * scale, car.y * scale);
+        this.cars.push(car);
+        return car;
+      }
+      return null;
+    }
+
+    // Water, moving. Still water is the one thing on this map that gives the
+    // picture away — everything else has a reason to be motionless and a canal
+    // does not. Four phases of the tile, cycled about six times a second, on a
+    // list of water tiles gathered once rather than by scanning the layer.
+    updateWater(time) {
+      if (!this.layer || !this.waterTiles) return;
+      if (!this.waterTiles.length) return;
+      var f = Math.floor(time / 170) % TILE.waterFrames.length;
+      if (f === this.waterPhase) return;
+      this.waterPhase = f;
+      var idx = TILE.waterFrames[f];
+      for (var i = 0; i < this.waterTiles.length; i++) {
+        var t = this.layer.getTileAt(this.waterTiles[i].x, this.waterTiles[i].y);
+        if (t) t.index = idx;
+      }
+    }
+
     // Broken cloud, seen from underneath: soft patches that darken the ground
     // as they pass over. Drawn once into a 256px tile and wrapped, with every
     // blob repeated at each edge offset so the pattern is seamless — a visible
@@ -3485,6 +3706,15 @@
       if (this.propGroup) this.propGroup.clear(true, true);
       if (this.trailGfx) this.trailGfx.clear();
       if (this.treasureGroup) this.treasureGroup.clear(true, true);
+      // The traffic is holding lanes out of the world about to be replaced.
+      this.carPool = this.carPool || [];
+      (this.cars || []).forEach(function (c) {
+        c.spr.setVisible(false);
+        if (c.beam) c.beam.setVisible(false);
+        if (c.tail) c.tail.setVisible(false);
+      });
+      this.carPool = this.carPool.concat(this.cars || []);
+      this.cars = [];
 
       var w = buildWorld();
       this.worldRef = w;
@@ -3506,7 +3736,15 @@
       var fine = makeNoise(w.cols, w.rows, 6, 47.9);
       this.broad = broad; this.fine = fine;
       var self0 = this;
-      this.layer.forEachTile(function (tile) { self0.tintTile(tile, w); });
+      // Water is animated, and finding it by scanning the layer six times a
+      // second would be the most expensive thing on screen. Gathered once here,
+      // on the pass that is already touching every tile.
+      this.waterTiles = [];
+      this.waterPhase = -1;
+      this.layer.forEachTile(function (tile) {
+        self0.tintTile(tile, w);
+        if (tile.index === TILE.water) self0.waterTiles.push({ x: tile.x, y: tile.y });
+      });
       at(0.55, "Planting the trees");
       await yieldFrame();
       if (stale()) return;
@@ -3742,6 +3980,10 @@
       var lit;
       if (w.shadow[tile.y * w.cols + tile.x]) {
         lit = mixHex(0x6e7382, 0x8e94a4, n);          // in the lee of a building
+      } else if (i === TILE.water || TILE.waterFrames.indexOf(i) >= 0) {
+        // Ahead of the wall test: the other three water phases live on the end
+        // of the sheet, past `wallBase`, and would otherwise be tinted as brick.
+        lit = mixHex(0xd2dcea, 0xffffff, n);
       } else if (i >= TILE.wallBase) {
         lit = mixHex(0xe6e6e6, 0xffffff, n);          // elevations self-shade
       } else if (i === TILE.hedge) {
@@ -3752,8 +3994,6 @@
         lit = mixHex(0xd0d2da, 0xeeeef6, n);          // wet, patched tarmac
       } else if (i <= TILE.kerbE) {
         lit = mixHex(0xdedcd6, 0xfcfcfa, n);
-      } else if (i === TILE.water) {
-        lit = mixHex(0xd2dcea, 0xffffff, n);
       } else {
         lit = mixHex(0xdcdcdc, 0xffffff, n * 0.6 + 0.4);   // roofs vary least
       }
@@ -5295,7 +5535,11 @@
       this.updateLights();
       this.updateContactShadows();
       this.swayTrees(time);
+      this.updateWater(time);
       this.updateGrade();
+      if (this.worldScale) {
+        this.updateTraffic(Math.min(0.1, (delta || 16) / 1000), this.worldScale);
+      }
       this.handlePinch();
       if (roam.on) { this.updateRoam(delta); return; }
       if (!pb.playing || !pb.walk) return;

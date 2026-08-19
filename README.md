@@ -530,11 +530,20 @@ a bitumen membrane in overlapping strips, ponding where it never lies flat, the
 odd rooflight, and a coping-stone parapet where it ends.
 
 The squirrel is mostly tail, because from directly above that is the whole
-silhouette — nobody reads the body of a squirrel, everybody reads the tail.
+silhouette — nobody reads the body of a squirrel, everybody reads the tail. It
+is tapered at both ends rather than cut off square, which at this size is the
+difference between a squirrel and a large mouse.
 
 Dogs are five builds and six coats, and what tells two breeds apart at sixteen
 pixels is the proportion between body, head and tail plus what the ears are
-doing. There are four more walkers beyond the two you can play as, for the
+doing. Seen from above a dog is a lozenge rather than a brick: the corners are
+knocked off both ends, the haunches are the widest part of him and swing a pixel
+with the trot, the muzzle tapers to the nose, and a one-pixel spine runs the
+length of him — that last line is the cheapest thing on the sprite and does most
+of the work. An earlier pass rolled the whole body a pixel instead of just the
+haunches, which snapped the animal into two halves. The legs are two joints, not
+one block, with the paw the darker of the two because it is the bit standing in
+the body's own shadow. There are four more walkers beyond the two you can play as, for the
 people you meet: two figures repeated down a street reads as a bug rather than
 as a neighbourhood.
 
@@ -545,6 +554,10 @@ above, a person is hair, shoulders, a coat and the tips of two shoes, so that is
 what has to carry it: the arms swing outside the coat because they are the only
 moving parts you can see, and the shoulders are wide across and narrow front to
 back. An earlier version had that the other way round and drew a small car.
+There is a hand on the end of each sleeve — two pixels of skin, and they are
+what tell you which end of the arm is which — a scarf at the neck showing as a
+band just west of the head, and the head rolls a pixel *across* the line of
+travel with the stride; along it, he would look like he was pecking.
 
 Ground tiles are 16px; props (parked cars, lamp posts, bins, pillar boxes,
 benches) are authored on 32px frames — two tiles across — so a car comes out
@@ -579,6 +592,40 @@ They have their own budget rather than sharing the lamps' — sharing it meant
 rain halved the number of street lights you could see, which is backwards.
 
 Heavy cloud brings the lights on early, which is very Glasgow.
+
+### Traffic
+
+Cars go about their business on the middle of the road, with their headlights
+on after dark — a hard white cone thrown down the road ahead and a red smudge
+behind, fading in on the same darkness the street lamps use so the whole street
+comes on together.
+
+The lanes are worked out when the world is built: every run of carriageway with
+carriageway on *both* sides of it, which is exactly the strip of tarmac a parked
+car can never be on, because parking requires a pavement tile alongside. So a
+moving car is guaranteed a clear lane without either system having to know the
+other exists. Residential roads come out three tiles wide, so that is the middle
+of the road; the wider classes get a lane each side of it. Which way a lane runs
+is read off which side of the road it is on — drive on the left, so the north
+side of an east–west road runs west — and down the exact middle of a three-wide
+street it is decided by position, so a given street always flows the same way.
+
+Deliberately sparse: five on screen at most, arriving one at a time with a gap
+between, because filling the quota on the first frame gives you a convoy rather
+than a street with cars on it. Nothing makes the carriageway solid — you are
+allowed to walk in the road — so a car stops for you and for the dog rather than
+driving through the pair of you.
+
+### Water
+
+Still water is the one thing on this map that gives away that it is a picture:
+everything else has a reason to be motionless and a canal does not. It is four
+phases of the tile cycled about six times a second, with the glints drifting one
+way and wrapping at the tile edge and a second, dimmer set drifting the other way
+at half the speed — which is what keeps the cycle from reading as one image
+sliding sideways. The three extra phases go on the *end* of the tilesheet rather
+than beside the first, so every index after `water` keeps the number it has
+always had.
 
 Everything that stands on the ground gets a soft contact shadow under it,
 offset south-east to agree with the light the whole tileset is drawn under.

@@ -349,13 +349,27 @@ def dirt_path():
     return im
 
 
-def water():
+def water(phase=0):
+    """Open water. Four phases of it, cycled at runtime.
+
+    Still water is the one thing on this map that gives away that it is a
+    picture -- everything else has a reason to be motionless and a canal does
+    not. The glints drift one way and wrap at the tile edge; a second, dimmer
+    set drifts the other way at half the speed, which is what keeps the cycle
+    from reading as one image sliding sideways.
+    """
     im, d = new((44, 72, 96))
     r = random.Random(970)
     dither(im, 0, 0, T - 1, T - 1, (40, 66, 90), (52, 84, 110), density=0.55)
-    for _ in range(5):
+    for i in range(5):
         x, y = r.randrange(1, T - 3), r.randrange(T)
-        rect(d, x, y, x + 2, y, (96, 134, 158))
+        x = (x + phase * 3) % T
+        for k in range(3 + (phase + i) % 2):
+            put(im, (x + k) % T, y, (96, 134, 158))
+    r2 = random.Random(971)
+    for _ in range(4):
+        x, y = r2.randrange(T), r2.randrange(T)
+        put(im, (x - phase * 2) % T, y, (68, 104, 128))
     return im
 
 
@@ -753,6 +767,11 @@ def walker(spec, frame):
     # the coat rather than being lost against it.
     r(6 - swing, 3, 8 - swing, 4, coat[0])
     r(6 + swing, 11, 8 + swing, 12, coat[0])
+    # A hand on the end of each sleeve. Two pixels of skin, and they are what
+    # tell you which end of the arm is which — without them the arms read as
+    # two loose blocks drifting alongside.
+    r(8 - swing, 3, 8 - swing, 3, skin)
+    r(8 + swing, 12, 8 + swing, 12, skin)
 
     # Coat. A person from above is wide across the shoulders and narrow front
     # to back — the opposite way round from a car, which is what an earlier
@@ -766,17 +785,28 @@ def walker(spec, frame):
     for cx, cy in ((5, 4), (5, 11), (11, 5), (11, 10)):     # knock the corners
         im.putpixel((cx, cy), (0, 0, 0, 0))
 
-    # Head, drawn over the shoulders. Light is fixed north-west, so the north
-    # of the crown catches it and the south falls away.
-    r(8, 5, 11, 9, hair[1])
-    r(8, 5, 11, 5, hair[2])
-    r(9, 9, 11, 9, hair[0])
-    r(12, 6, 12, 8, skin)                                   # face, looking east
-    r(12, 6, 12, 6, (skin[0] - 30, skin[1] - 30, skin[2] - 30))
+    # A scarf at the neck, in the light end of the coat, showing as a band just
+    # west of the head. One column of pixels, and it is the cheapest thing that
+    # stops the figure reading as a coat with a wig sitting on it. Long hair
+    # falls over the same spot, so those two get theirs hidden, as they would be.
+    if not spec["long"]:
+        r(7, 5, 8, 9, coat[2])
+        r(7, 5, 8, 5, coat[1])
+
+    # Head, drawn over the shoulders. Light is fixed north-west, so the north of
+    # the crown catches it and the south falls away. It rolls a pixel across the
+    # line of travel with the stride, the way a head does when the weight goes
+    # over one foot — along it, it would look like he was pecking.
+    bob = [0, -1, 0, 1][frame % 4]
+    r(8, 5 + bob, 11, 9 + bob, hair[1])
+    r(8, 5 + bob, 11, 5 + bob, hair[2])
+    r(9, 9 + bob, 11, 9 + bob, hair[0])
+    r(12, 6 + bob, 12, 8 + bob, skin)                       # face, looking east
+    r(12, 6 + bob, 12, 6 + bob, (skin[0] - 30, skin[1] - 30, skin[2] - 30))
     if spec["long"]:
-        r(7, 4, 8, 10, hair[1])                             # hair past the collar
-        r(7, 4, 8, 4, hair[2])
-        r(7, 10, 8, 10, hair[0])
+        r(7, 4 + bob, 8, 10 + bob, hair[1])                 # hair past the collar
+        r(7, 4 + bob, 8, 4 + bob, hair[2])
+        r(7, 10 + bob, 8, 10 + bob, hair[0])
 
     # A dark edge along the south and east, where the ground behind is lit.
     # Without it the figure dissolves into the pavement at walking zoom. Read
@@ -834,6 +864,14 @@ def squirrel(frame):
     r(4, ty - 4, 7, ty - 4, s[4])           # lit crown of the curl
     r(2, ty - 2, 3, ty, s[2])               # the tip, curling under
     r(4, ty + 1, 6, ty + 1, s[1])           # underside, in shadow
+    # Tapered rather than cut off square: a squirrel's tail narrows to a wisp,
+    # and at this size that one notch at each end is what says squirrel rather
+    # than large mouse.
+    for nx, ny in ((7, ty - 4), (2, ty), (3, ty - 3)):
+        if 0 <= nx < WT and 0 <= ny < WT:
+            im.putpixel((nx, ny), (0, 0, 0, 0))
+    r(6, ty - 3, 6, ty - 3, s[4])           # a lit strand through the fur
+    r(4, ty - 1, 5, ty - 1, s[2])
 
     # Body: compact, gathering and extending as it bounds.
     r(6, 6, 9 + stretch, 9, s[1])
@@ -844,7 +882,14 @@ def squirrel(frame):
     r(10 + stretch, 6, 12 + stretch, 9, s[2])
     r(10 + stretch, 6, 12 + stretch, 6, s[3])
     im.putpixel((min(WT - 1, 12 + stretch), 8), (26, 22, 18, 255))
-    r(10 + stretch, 5, 11 + stretch, 5, s[2])   # ear
+    r(10 + stretch, 5, 11 + stretch, 5, s[2])   # ears, one each side, tufted
+    r(10 + stretch, 10, 11 + stretch, 10, s[1])
+    r(10 + stretch, 4, 10 + stretch, 4, s[3])
+    # Muzzle: the head narrows to it, which is the only bit of shape a body
+    # this small can carry.
+    for nx, ny in ((12 + stretch, 6), (12 + stretch, 9)):
+        if 0 <= nx < WT and 0 <= ny < WT:
+            im.putpixel((nx, ny), (0, 0, 0, 0))
 
     solid = [[im.getpixel((x, y))[3] >= 128 for y in range(WT)] for x in range(WT)]
     for y in range(WT):
@@ -918,6 +963,10 @@ def dog_sprite(t, coat, frame):
 
     gait = [0, 1, 0, -1][frame % 4]
     swing = [0, -1, 0, 1][frame % 4]
+    # A trotting dog swings its hips: the body itself rolls a pixel off the line
+    # of travel and back. Without it the legs move and the animal does not, and
+    # four frames of that reads as a toy being slid along.
+    roll = [0, 1, 0, -1][frame % 4] if t["len"] > 5 else 0
     cy, W, L = 8, t["wide"], t["len"]
 
     hx1 = 13
@@ -926,8 +975,12 @@ def dog_sprite(t, coat, frame):
     bx0 = bx1 - L + 1
 
     # Legs first, so the body sits over them. Front and back pairs step opposite.
+    # Two joints rather than one block: from above you see the upper leg swing
+    # out from the body and the paw land ahead of it, and the paw is the darker
+    # of the two because it is the bit in the body's own shadow.
     for lx, dirn in ((bx1 - 1, gait), (bx0 + 1, -gait)):
-        rect_(lx + dirn, cy - W - 1, lx + dirn, cy - W, r[0])
+        rect_(lx + dirn, cy - W - 1, lx + dirn, cy - W, r[1])
+        rect_(lx + dirn, cy - W - 1, lx + dirn, cy - W - 1, r[0])
         rect_(lx - dirn, cy + W, lx - dirn, cy + W + 1, r[0])
 
     # Tail.
@@ -948,13 +1001,39 @@ def dog_sprite(t, coat, frame):
     rect_(bx0, cy - W, bx1, cy + W, r[1])
     rect_(bx0, cy - W, bx1, cy - W, r[2])
     rect_(bx0, cy + W, bx1, cy + W, r[0])
-    if patchy:                                       # a black-and-white dog
-        rect_(bx0 + 1, cy - W, bx0 + 3, cy + W, r[3])
-        rect_(bx0 + 1, cy - W, bx0 + 3, cy - W, r[4])
 
-    # Head, and ears.
-    rect_(hx0, cy - W + 1, hx1, cy + W - 1, r[2])
-    rect_(hx0, cy - W + 1, hx1, cy - W + 1, r[3])
+    def clear_(x, y):
+        if 0 <= x < WT and 0 <= y < WT:
+            im.putpixel((x, y), (0, 0, 0, 0))
+
+    # Rounded off at both ends. A dog from above is a lozenge, not a brick, and
+    # the corners are the entire difference between the two.
+    if W > 1:
+        for corner in ((bx0, cy - W), (bx0, cy + W), (bx1, cy - W), (bx1, cy + W)):
+            clear_(corner[0], corner[1])
+        # Haunches: the widest part of a dog from above is its back end, and it
+        # swings a pixel with the trot — the whole roll of the body translated
+        # a pixel instead, which snapped the animal into two halves.
+        rect_(bx0 + 1, cy - W - 1, bx0 + 2 + roll, cy - W - 1, r[1])
+        rect_(bx0 + 1, cy + W + 1, bx0 + 2 - roll, cy + W + 1, r[0])
+
+    # The spine, one value up the ramp, running the length of him. Cheapest
+    # thing on the sprite and it does most of the work at this size.
+    rect_(bx0 + 1, cy - W + 1, bx1 - 1, cy - W + 1, r[2])
+    if patchy:
+        # A saddle across the back rather than a band all the way round. Full
+        # height it swallowed the whole animal and left a white brick with legs.
+        rect_(bx0 + 2, cy - W + 1, bx0 + 3, cy, r[3])
+        rect_(bx0 + 2, cy - W + 1, bx0 + 3, cy - W + 1, r[4])
+
+    # Head, and ears. Tapered to a muzzle rather than squared off — from above
+    # the skull is wide and the nose end is two pixels of it.
+    if W > 1:
+        rect_(hx0, cy - W + 1, hx1 - 1, cy + W - 1, r[2])
+        rect_(hx1, cy - W + 2, hx1, cy + W - 2, r[2])
+    else:
+        rect_(hx0, cy - W + 1, hx1, cy + W - 1, r[2])
+    rect_(hx0, cy - W + 1, hx1 - 1, cy - W + 1, r[3])
     ears = t["ears"]
     if ears == "drop":
         rect_(hx0, cy - W, hx0 + 1, cy - W, r[1])
@@ -968,7 +1047,7 @@ def dog_sprite(t, coat, frame):
     else:                                            # back, flat to the skull
         rect_(hx0 + 1, cy - W + 1, hx0 + 2, cy - W + 1, r[1])
     if patchy:
-        rect_(hx1 - 1, cy - W + 1, hx1, cy + W - 1, r[4])   # a white blaze
+        rect_(hx1 - 1, cy - W + 1, hx1 - 1, cy - W + 1, r[4])   # a blaze, one pixel
 
     im.putpixel((min(WT - 1, hx1), cy), (20, 18, 18, 255))  # nose
 
@@ -1075,6 +1154,13 @@ def build():
     index["shopWall"] = len(tiles)
     for k in range(3):
         tiles.append(shopfront(k))
+
+    # The other three water phases go on the end rather than beside the first
+    # one, so every index after `water` keeps the number it has always had.
+    index["waterFrames"] = [index["water"]]
+    for phase in range(1, 4):
+        index["waterFrames"].append(len(tiles))
+        tiles.append(water(phase))
 
     rows = (len(tiles) + COLS - 1) // COLS
     sheet = Image.new("RGBA", (COLS * T, rows * T), (0, 0, 0, 0))
