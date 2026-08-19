@@ -337,6 +337,9 @@ async function waitForReady(page) {
       r.dog.want = null; r.dog.sniffFor = 0; r.dog.strainFor = 0;
       r.npcs.forEach((n) => { n.met = true; });
       r.nextSquirrel = 999;          // an earlier check left the timer at zero
+      r.ball = null; r.hasBall = true;
+      const sc = window.game.scene.getScene("world");
+      if (sc.ballSpr) sc.ballSpr.setVisible(false);
       (r.interests || []).forEach((i) => { i.done = false; i.cool = 0; });
       const s = window.game.scene.getScene("world");
       if (s.critter) s.critter.setVisible(false);
@@ -872,6 +875,189 @@ async function waitForReady(page) {
     });
     check("leaving them behind recycles them", recycled.pooled > 0,
           JSON.stringify(recycled));
+
+    // ---------- the bond ----------
+    // The whole point of it is that it changes what he does, so every check
+    // here is about behaviour, not about the number going up.
+    await resetRoam();
+    const bondEarned = await page.evaluate(() => {
+      const d = window.dogwalk, s = window.game.scene.getScene("world"), r = d.roam;
+      d.state.bond = 40;
+      // Put him a long way off with something on his mind, then whistle: the
+      // expensive recall, which is what the bond is mostly made of.
+      for (let dist = 24; dist > 8; dist--) {
+        for (let a = 0; a < 12; a++) {
+          const th = a * Math.PI / 6;
+          const x = r.x + Math.cos(th) * dist, y = r.y + Math.sin(th) * dist;
+          if (!s.dogBlocked(x, y)) {
+            r.dog.x = x; r.dog.y = y;
+            const before = d.state.bond;
+            r.whistleCool = 0;
+            document.getElementById("btn-whistle").click();
+            return { before, from: Math.round(dist), recalling: r.recalling,
+                     banked: Math.round(r.recallFrom) };
+          }
+        }
+      }
+      return null;
+    });
+    if (bondEarned) {
+      await page.waitForFunction(() => !window.dogwalk.roam.recalling,
+                                 null, { timeout: 15000 }).catch(() => {});
+      const paid = await page.evaluate(() => window.dogwalk.state.bond);
+      check("coming back from a long way off is what builds him",
+            paid > bondEarned.before,
+            JSON.stringify(Object.assign({ after: +paid.toFixed(1) }, bondEarned)));
+    }
+
+    check("the bond survives being written down", await page.evaluate(() => {
+      const raw = JSON.parse(localStorage.getItem("dogwalk.dog.v1") || "{}");
+      return isFinite(raw.bond) && Math.abs(raw.bond - window.dogwalk.state.bond) < 0.001;
+    }), await page.evaluate(() => "stored " +
+      JSON.parse(localStorage.getItem("dogwalk.dog.v1") || "{}").bond));
+
+    // Barely listening he is a speck at the far end of the park; steady, he
+    // keeps himself near you. Same park, same frame budget, different dog.
+    await resetRoam();
+    const ranged = await page.evaluate(async () => {
+      const d = window.dogwalk, s = window.game.scene.getScene("world"), w = s.worldRef;
+      const r = d.roam;
+      // Stand in the park and stay still, so the only thing moving him is him.
+      let placed = false;
+      for (let ty = 0; ty < w.rows && !placed; ty++) {
+        for (let tx = 0; tx < w.cols && !placed; tx++) {
+          if (!w.park[ty * w.cols + tx]) continue;
+          const mx = (tx + 0.5) * w.mpt, my = (ty + 0.5) * w.mpt;
+          if (s.blocked(mx, my)) continue;
+          r.x = mx; r.y = my; placed = true;
+        }
+      }
+      if (!placed) return null;
+      const wait = (ms) => new Promise((go) => setTimeout(go, ms));
+      const runFor = async (bond) => {
+        d.state.bond = bond;
+        r.offLead = true; r.recalling = false; r.squirrel = null;
+        r.nextSquirrel = 999; r.dog.want = null; r.dog.sniffFor = 0;
+        // Both start at your heel and you stand still throughout, so the only
+        // thing deciding how far he gets is how far he wants to be.
+        r.dog.x = r.x + 1.5; r.dog.y = r.y;
+        r.dog.wander = null; r.dog.wanderFor = 0;
+        r.still = 5;
+        let worst = 0;
+        for (let i = 0; i < 30; i++) {
+          await wait(120);
+          r.still = 5;                       // you have not moved
+          worst = Math.max(worst, Math.hypot(r.dog.x - r.x, r.dog.y - r.y));
+        }
+        return Math.round(worst);
+      };
+      const loose = await runFor(5);
+      const steady = await runFor(95);
+      return { loose, steady, park: true };
+    });
+    if (ranged) {
+      check("a dog who trusts you stays near you off the lead",
+            ranged.steady < ranged.loose,
+            "barely listening " + ranged.loose + "m, inseparable " + ranged.steady + "m");
+    }
+
+    // The unlock: steady enough, and a proper footpath will do — but never the
+    // pavement, however well he behaves.
+    const unlock = await page.evaluate(() => {
+      const d = window.dogwalk, s = window.game.scene.getScene("world"), w = s.worldRef;
+      const found = { footway: null, pavement: null };
+      for (let ty = 0; ty < w.rows; ty++) for (let tx = 0; tx < w.cols; tx++) {
+        const k = w.kind[ty * w.cols + tx], i = ty * w.cols + tx;
+        if (w.park[i] || w.solid[i]) continue;
+        const mx = (tx + 0.5) * w.mpt, my = (ty + 0.5) * w.mpt;
+        if (k === 6 && !found.footway) found.footway = [mx, my];
+        if (k === 2 && !found.pavement) found.pavement = [mx, my];
+      }
+      const at = (p, bond) => {
+        d.state.bond = bond;
+        return s.offLeadOk(p[0], p[1]);
+      };
+      return {
+        footLow: found.footway ? at(found.footway, 20) : null,
+        footHigh: found.footway ? at(found.footway, 90) : null,
+        paveHigh: found.pavement ? at(found.pavement, 100) : null
+      };
+    });
+    check("a footpath opens up only once he is steady",
+          unlock.footLow === null ||
+          (unlock.footLow === false && unlock.footHigh === true),
+          JSON.stringify(unlock));
+    check("the pavement never does, however good he is",
+          unlock.paveHigh === null || unlock.paveHigh === false,
+          JSON.stringify(unlock));
+
+    // Slipping the lead costs more than a recall earns, or the cheapest way to
+    // a perfect dog would be to keep losing him.
+    check("losing him is dearer than getting him back", await page.evaluate(() => {
+      const d = window.dogwalk;
+      const was = d.state.bond;
+      d.state.bond = 60;
+      d.bond(-8);
+      const lost = 60 - d.state.bond;
+      d.state.bond = 60;
+      d.bond(3 + 2 + 1.5);
+      const gained = d.state.bond - 60;
+      d.state.bond = was;
+      return lost > gained;
+    }));
+
+    // ---------- fetch ----------
+    await resetRoam();
+    const fetch0 = await page.evaluate(() => {
+      const d = window.dogwalk, r = d.roam;
+      r.offLead = false; r.hasBall = true; r.ball = null;
+      const before = document.getElementById("btn-throw").disabled;
+      const threw = d.throwBall();
+      return { before, threw, ball: !!r.ball };
+    });
+    check("you cannot play fetch on a lead", !fetch0.threw && !fetch0.ball,
+          JSON.stringify(fetch0));
+
+    const flew = await page.evaluate(() => {
+      const d = window.dogwalk, s = window.game.scene.getScene("world"), w = s.worldRef;
+      const r = d.roam;
+      d.state.bond = 90;                     // he will bring it back
+      for (let ty = 0; ty < w.rows; ty++) for (let tx = 0; tx < w.cols; tx++) {
+        if (!w.park[ty * w.cols + tx]) continue;
+        const mx = (tx + 0.5) * w.mpt, my = (ty + 0.5) * w.mpt;
+        if (s.blocked(mx, my)) continue;
+        r.x = mx; r.y = my; r.dog.x = mx + 2; r.dog.y = my;
+        r.offLead = true; r.recalling = false; r.squirrel = null; r.nextSquirrel = 999;
+        r.hasBall = true; r.ball = null; r.fetches = 0;
+        r.hx = 1; r.hy = 0;
+        const ok = d.throwBall();
+        return ok ? { thrown: true, x: r.ball.x, y: r.ball.y,
+                      tx: r.ball.tx, ty: r.ball.ty,
+                      far: +Math.hypot(r.ball.tx - r.x, r.ball.ty - r.y).toFixed(1),
+                      hasBall: r.hasBall } : { thrown: false };
+      }
+      return { thrown: false };
+    });
+    check("the ball goes where you are facing", flew.thrown && flew.far > 1 &&
+          !flew.hasBall && flew.tx > flew.x - 0.01, JSON.stringify(flew));
+    if (flew.thrown) {
+      check("it lands, and nowhere solid", await page.evaluate(async () => {
+        const d = window.dogwalk, s = window.game.scene.getScene("world");
+        await new Promise((go) => setTimeout(go, 1200));
+        const b = d.roam.ball;
+        return !b || b.state !== "flying" ? !b || !s.dogBlocked(b.x, b.y) : false;
+      }));
+      await page.waitForFunction(() => window.dogwalk.roam.fetches > 0 ||
+                                       window.dogwalk.roam.keepaways > 0,
+                                 null, { timeout: 20000 }).catch(() => {});
+      const got = await page.evaluate(() => ({
+        fetches: window.dogwalk.roam.fetches,
+        keepaways: window.dogwalk.roam.keepaways,
+        hasBall: window.dogwalk.roam.hasBall,
+        joy: Math.round(window.dogwalk.roam.joy) }));
+      check("he fetches it and gives it back", got.fetches > 0 && got.hasBall,
+            JSON.stringify(got));
+    }
 
     // Ending up inside geometry must not trap you.
     const escaped = await page.evaluate(() => {

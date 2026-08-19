@@ -194,7 +194,7 @@
 
   /* How good a walk he is having. One bar, because it is one number, and it
      fills warm as it goes — a dog's day is not a percentage. */
-  #roam-joy, #roam-energy { width: 76px; display: flex; flex-direction: column; gap: 3px; }
+  #roam-joy, #roam-energy, #roam-bond { width: 76px; display: flex; flex-direction: column; gap: 3px; }
   #roam-energy i {
     display: block; height: 7px; border-radius: 4px;
     background: rgba(255,255,255,0.08); border: 1px solid var(--panel-edge);
@@ -248,6 +248,23 @@
     transition: width 0.25s ease;
   }
   #roam-joy span { font-size: 10px; opacity: 0.6; }
+
+  /* The bond. The one meter that is still there next walk, so it gets a
+     different colour from the two that reset — this is the long game. */
+  #roam-bond i {
+    display: block; height: 7px; border-radius: 4px;
+    background: rgba(255,255,255,0.08); border: 1px solid var(--panel-edge);
+    position: relative; overflow: hidden;
+  }
+  #roam-bond i::after {
+    content: ""; position: absolute; inset: 0; width: var(--bond, 0%);
+    background: linear-gradient(90deg, #8f3f66, #e46a9c);
+    transition: width 0.4s ease;
+  }
+  #roam-bond.steady i::after { background: linear-gradient(90deg, #b04a7a, #ff8fbc); }
+  #roam-bond.steady i { box-shadow: 0 0 6px rgba(255,143,188,0.4); }
+  #roam-bond span { font-size: 10px; opacity: 0.6; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
   #btn-roam-lead[disabled] { opacity: 0.4; cursor: default; }
   #btn-roam-hold.off { display: none; }
   #btn-roam-hold { animation: grip 0.6s steps(2) infinite; }
@@ -294,6 +311,14 @@
   }
   #roam-panel h3 { margin: 0 0 6px; font-size: 18px; }
   #roam-panel p { margin: 0 0 14px; font-size: 13px; opacity: 0.75; line-height: 1.45; }
+  /* Where you left off with him. Set apart from the blurb, because it is the
+     one line on this panel that is different every time you open it. */
+  #roam-bond-line {
+    margin: -6px 0 14px !important; padding: 7px 10px; font-size: 12px !important;
+    opacity: 1 !important; border-left: 3px solid #b04a7a; border-radius: 0 6px 6px 0;
+    background: rgba(176,74,122,0.12); color: #f0c2d6;
+  }
+  #roam-bond-line.steady { border-left-color: #ff8fbc; color: #ffd7e6; }
   #roam-panel .row { display: flex; gap: 8px; margin-top: 16px; }
   .elsewhere { margin: 14px 0 0 !important; font-size: 12px !important; }
   .linkish {
@@ -515,10 +540,14 @@
     <div id="roam-energy" title="How much he has left in him">
       <i></i><span>legs</span>
     </div>
+    <div id="roam-bond" title="How well he walks with you — this one keeps between walks">
+      <i></i><span>bond</span>
+    </div>
     <div class="acts">
       <button class="btn" id="btn-whistle" title="Call him back (C)">♪ Whistle</button>
       <button class="btn" id="btn-pet" title="Give him a fuss (F)">Pet</button>
       <button class="btn" id="btn-treat" title="Give him a treat (T)">Treat <b id="treat-n">5</b></button>
+      <button class="btn" id="btn-throw" title="Throw the ball (B) — off the lead only">Throw</button>
       <button class="btn" id="btn-rest" title="Sit down on a bench (R)">Sit</button>
       <button class="btn off" id="btn-bag" title="Pick up after him / bin it (G)">Bag it</button>
     </div>
@@ -526,7 +555,7 @@
     <button class="btn primary off" id="btn-roam-hold">Hold!</button>
     <div id="roam-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
       <span class="k-only">or</span><span>drag to walk</span>
-      <span class="k-only">&middot; shift to jog &middot; space grips &middot; C F T</span></div>
+      <span class="k-only">&middot; shift to jog &middot; space grips &middot; C F T B</span></div>
     <div id="roam-warn"></div>
     <button class="btn" id="btn-roam-stop">Finish</button>
   </div>
@@ -559,6 +588,7 @@
     <h3 id="roam-head">Take him out yourself</h3>
     <p id="roam-blurb">Walk the real streets he knows and he will follow you.
       Pick who is holding the lead.</p>
+    <p id="roam-bond-line">He is still working you out.</p>
     <div id="roam-who">
       <button class="who on" data-who="her"><canvas width="48" height="48"></canvas><span>Her</span></button>
       <button class="who" data-who="him"><canvas width="48" height="48"></canvas><span>Him</span></button>
@@ -700,7 +730,8 @@
     points: [], walks: [], bounds: null, territory: null, grid: null, activeWalk: -1, wx: null,
     stops: [], roamed: [],
     osmWays: null, dogName: "Your Dog", placeLabel: null,
-    dogType: "labrador", dogCoat: "black", dogCollar: "green"
+    dogType: "labrador", dogCoat: "black", dogCollar: "green",
+    bond: 25                                 // see BOND_START; kept between walks
   };
 
   function seededRandom(seed) {
@@ -2614,6 +2645,49 @@
   var WHISTLE_COOL = 2;
   var PET_LINES = ["good boy", "who's a good dog", "aw, look at you", "there we go"];
 
+  // ---------- the bond ----------
+  // The one number that carries between walks. Everything you do that a dog
+  // would count as being worth coming back for puts it up; everything that
+  // teaches him you are not worth listening to puts it down. It is not a score
+  // — it is what decides how he behaves when the lead is off, which is the only
+  // place a dog's opinion of you actually shows.
+  //
+  // Deliberately slow: a good walk moves it ten or fifteen points, so a dog you
+  // can trust in an open park is several walks of work rather than one treat.
+  var BOND_START = 25;
+  var BOND_RECALL = 3;        // he came when called
+  var BOND_RECALL_FAR = 2;    // ...from off the lead, which is the hard one
+  var BOND_RECALL_BUSY = 1.5; // ...and left something interesting to do it
+  var BOND_TREAT = 2.5, BOND_PET = 1.5, BOND_FETCH = 3, BOND_STEADY = 1.5;
+  var BOND_SLIP = -8;         // he learned he can just go
+  var BOND_LEFT = -4;         // walked off and left it
+  var BOND_HAULED = -0.3;     // dragged past one more thing he wanted
+  // Above this he is steady enough to be let off on a quiet footpath, not just
+  // inside a park fence. It is the unlock the whole thing is aiming at.
+  var STEADY_BOND = 0.65;
+
+  function bondF() { return Math.max(0, Math.min(1, (state.bond || 0) / 100)); }
+
+  // Five words for where you are with each other, so the meter means something
+  // without a number on it.
+  function bondWord() {
+    var b = bondF();
+    return b >= 0.85 ? "inseparable" : b >= 0.65 ? "steady as anything"
+         : b >= 0.45 ? "coming along" : b >= 0.22 ? "still working you out"
+         : "barely listening";
+  }
+
+  function bond(delta, why) {
+    var was = state.bond || 0;
+    state.bond = Math.max(0, Math.min(100, was + delta));
+    if (state.bond !== was) saveDogLook();
+    if (why && scene && roam.on && Math.abs(delta) >= 1) {
+      scene.floatText(roam.dog.x, roam.dog.y - 1.4,
+        (delta > 0 ? "♥ " : "♡ ") + why);
+    }
+    return state.bond;
+  }
+
   // How tired he is, which is what gives a walk a shape: eager at the start,
   // flagging by the end, and a sit on a bench is worth stopping for. Drains
   // with ground covered rather than with the clock, so standing about talking
@@ -2639,6 +2713,18 @@
   var BIN_M = 3.0;                           // near enough to drop it in
   var BAG_WINDOW = 22;                       // seconds before you have walked off
   var BAG_JOY = 6, BIN_JOY = 10, LEFT_PENALTY = 14;
+
+  // Fetch. A ball goes in your pocket at the start of every walk, and it only
+  // comes out when he is off the lead — a dog on a two-metre lead cannot fetch
+  // anything, and being told so is the clearest possible reason to find a park.
+  var THROW_M = [11, 19];                    // how far it goes, random in range
+  var THROW_SECONDS = 0.85;                  // time in the air
+  var BALL_GRAB_M = 0.9;                     // near enough for him to get it
+  var BALL_BACK_M = LEAD_M * 0.8;            // near enough to drop it at your feet
+  var BALL_PICKUP_M = 1.3;                   // near enough for you to pick it up
+  var FETCH_JOY = 11;                        // per retrieve, worth a couple of sniffs
+  var KEEPAWAY_BOND = 0.35;                  // under this he would rather be chased
+  var KEEPAWAY_M = 5.5;                      // how far off he drops it instead
 
   // Favours. People you meet ask for a hand with something, and so do the
   // shops and halls the map already knows the names of. Every target is a real
@@ -2714,6 +2800,8 @@
     quests: [], questsDone: 0, questSeq: 0, askedAt: {},
     race: null,
     squirrel: null, nextSquirrel: 30, gripping: false,
+    ball: null, hasBall: true, fetches: 0, keepaways: 0, steadied: 0,
+    bondAt: 0,                               // what it was when you set off
     interests: null, buckets: null, warn: "",
     keys: {},                                // held keys, by direction
     stick: null                              // touch joystick: {ox, oy, dx, dy}
@@ -2835,6 +2923,7 @@
       this.makeCloudTexture();
       this.makeGlowTexture();
       this.makeBlobTexture();
+      this.makeBallTexture();
       this.lightLevel = 0;
       this.windKmh = 0;
       this.wetness = 0;
@@ -2899,6 +2988,30 @@
       g.addColorStop(1, "rgba(12,14,20,0)");
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, S, S);
+      tex.refresh();
+    }
+
+    // The ball. Eight pixels of tennis ball drawn once at load, in the same
+    // five-value ramp everything else on this map is drawn in — lit from the
+    // north-west, one seam, one shadow under the belly of it.
+    makeBallTexture() {
+      if (this.textures.exists("ball")) return;
+      var S = 8, tex = this.textures.createCanvas("ball", S, S);
+      var ctx = tex.getContext();
+      var px = function (x, y, c) { ctx.fillStyle = c; ctx.fillRect(x, y, 1, 1); };
+      var lit = "#e8ef7a", mid = "#cbd94a", dark = "#98a832", edge = "#6e7a24";
+      var rows = [
+        [2, 5], [1, 6], [1, 6], [0, 7], [0, 7], [1, 6], [1, 6], [2, 5]
+      ];
+      for (var y = 0; y < S; y++) {
+        for (var x = rows[y][0]; x <= rows[y][1]; x++) {
+          var d = Math.hypot(x - 2.6, y - 2.6);
+          px(x, y, d < 1.5 ? lit : d < 3.1 ? mid : d < 4.2 ? dark : edge);
+        }
+      }
+      // The seam, which is the only thing that says tennis ball rather than pea.
+      px(2, 1, lit); px(1, 2, lit); px(1, 3, lit);
+      px(5, 4, "#f2f6c0"); px(6, 5, "#f2f6c0");
       tex.refresh();
     }
 
@@ -3855,6 +3968,11 @@
       roam.pickedUp = 0; roam.leftBehind = 0; roam.binned = 0;
       roam.quests = []; roam.questsDone = 0; roam.questSeq = 0; roam.askedAt = {};
       roam.race = null;
+      roam.ball = null; roam.hasBall = true; roam.thrown = 0;
+      roam.fetches = 0; roam.keepaways = 0; roam.steadied = 0;
+      roam.recalls = 0; roam.recallFrom = 0; roam.recallBusy = false;
+      roam.bondAt = state.bond || 0;
+      if (this.ballSpr) this.ballSpr.setVisible(false);
       roam.startedAt = Date.now();
       roam.lastTick = 0;
       this.buildInterests();
@@ -3996,6 +4114,7 @@
       this.updateRace(total, scale);
       this.updateSquirrel(total, scale);
       this.updateNpcs(total, scale);
+      this.updateBall(total, scale);
       this.updateRoamDog(total, scale);
       this.drawLead(scale);
 
@@ -4011,11 +4130,19 @@
         if (Math.hypot(roam.x - roam.dog.x, roam.y - roam.dog.y) < LEAD_M * 0.9) {
           var slipped = roam.recallReason === "slip";
           roam.recalling = false; roam.recallReason = null; roam.warn = "";
+          // This is the moment the whole bond is made of: he was somewhere else,
+          // you called, and he came. Worth most when it cost him something.
+          var earned = BOND_RECALL +
+            (roam.recallFrom > LEAD_M * 3 ? BOND_RECALL_FAR : 0) +
+            (roam.recallBusy ? BOND_RECALL_BUSY : 0);
+          roam.recallFrom = 0; roam.recallBusy = false;
+          roam.recalls = (roam.recalls || 0) + 1;
+          if (!slipped) bond(earned, "he came straight back");
           // Only clip him back on if he had got loose. Whistling him over in a
           // park is not you saying the park is finished.
           if (slipped) { roam.offLead = false; toast("Got him"); }
         }
-      } else if (roam.offLead && !roam.squirrel && !this.onPark(roam.x, roam.y)) {
+      } else if (roam.offLead && !roam.squirrel && !this.offLeadOk(roam.x, roam.y)) {
         roam.warn = "Put him back on the lead";
       } else if (roam.warn === "Put him back on the lead") {
         roam.warn = "";
@@ -4042,8 +4169,21 @@
     dogGoal(dt) {
       var d = roam.dog;
 
-      if (roam.squirrel) return { x: roam.squirrel.x, y: roam.squirrel.y, urgent: true };
+      if (roam.squirrel && !roam.squirrel.steady) {
+        return { x: roam.squirrel.x, y: roam.squirrel.y, urgent: true };
+      }
       if (roam.recalling) { d.want = null; return { x: roam.x, y: roam.y, urgent: true }; }
+
+      // A thrown ball beats everything else on the street. Carrying it, he is
+      // heading back to you — how willingly is the bond's business, not his.
+      if (roam.ball && roam.ball.state === "carried") {
+        d.want = null;
+        return { x: roam.x, y: roam.y, urgent: true };
+      }
+      if (roam.ball && roam.ball.state === "down" && roam.ball.ignore <= 0 && roam.offLead) {
+        d.want = null;
+        return { x: roam.ball.x, y: roam.ball.y, urgent: true };
+      }
       // Another dog beats a lamp post every time. He stops a nose short of
       // them rather than walking into them — two dogs drawn on top of each
       // other is one dog.
@@ -4054,20 +4194,53 @@
         return { x: g.x + ax / ad * 1.3, y: g.y + ay / ad * 1.3, urgent: false };
       }
 
+      // Off the lead, the bond is the lead. A dog who has learned you are worth
+      // staying near checks back and keeps himself inside a few metres of you;
+      // one who has not is a speck at the far end of the park. Nobody is pulling
+      // him — he is choosing it, which is exactly the thing being bought.
+      if (roam.offLead) {
+        var b = bondF();
+        var stray = 34 - 22 * b;              // 34m barely listening, 12m inseparable
+        var away = Math.hypot(d.x - roam.x, d.y - roam.y);
+        if (away > stray) {
+          d.want = null;
+          // Well bonded he comes straight back; barely listening he only drifts
+          // vaguely your way, so you still have to whistle him.
+          return { x: roam.x, y: roam.y, urgent: b > 0.5 };
+        }
+      }
+
       // Has he still got something in mind, and is it still worth having?
       if (d.want && (d.want.done || d.want.cool > 0)) d.want = null;
       if (!d.want && d.sniffFor <= 0) {
-        d.want = this.nearestWant(d.x, d.y, roam.offLead ? SNIFF_FREE_M : SNIFF_NEAR_M);
+        // How far he will range for a sniff off the lead narrows as he settles
+        // with you: thirty metres at the start, a dozen once he is steady.
+        var reach = roam.offLead ? 12 + (SNIFF_FREE_M - 12) * (1 - bondF()) : SNIFF_NEAR_M;
+        d.want = this.nearestWant(d.x, d.y, reach);
         d.strainFor = 0;
       }
       if (d.want) return { x: d.want.x, y: d.want.y, urgent: false };
 
       if (roam.still > SNIFF_AFTER) {
-        // Nothing doing and you have stopped. Pootle about.
+        // Nothing doing and you have stopped. Pootle about — but how far is the
+        // bond again: on the lead he has four metres of it whatever he thinks
+        // of you, and off it he goes exactly as far as he feels like, which for
+        // a dog who has not settled with you is the other end of the park.
         if (!d.wander || d.wanderFor <= 0) {
-          var th = Math.random() * Math.PI * 2, rr = 1.5 + Math.random() * 2.5;
-          var wx = roam.x + Math.cos(th) * rr, wy = roam.y + Math.sin(th) * rr;
-          d.wander = this.blocked(wx, wy) ? { x: roam.x, y: roam.y } : { x: wx, y: wy };
+          var lo = 1.5, span = 2.5;
+          if (roam.offLead) {
+            var bw = bondF();
+            lo = 2 + 15 * (1 - bw);
+            span = 4 + 13 * (1 - bw);
+          }
+          // Several candidates, because a wide ring in a walled park lands in a
+          // wall most times it is sampled, and giving up parks him on your feet.
+          d.wander = { x: roam.x, y: roam.y };
+          for (var wt = 0; wt < 10; wt++) {
+            var th = Math.random() * Math.PI * 2, rr = lo + Math.random() * span;
+            var wx = roam.x + Math.cos(th) * rr, wy = roam.y + Math.sin(th) * rr;
+            if (!this.dogBlocked(wx, wy)) { d.wander = { x: wx, y: wy }; break; }
+          }
           d.wanderFor = 1.5 + Math.random() * 2.5;
         }
         d.wanderFor -= dt;
@@ -4160,6 +4333,9 @@
           d.want = null; d.strainFor = 0;
           roam.refused++;
           roam.joy = Math.max(0, roam.joy - 1);
+          // One more thing he wanted and did not get. Nothing on its own; a
+          // walk of nothing but this is a dog who stops asking you.
+          bond(BOND_HAULED);
         }
       } else if (d.want) {
         d.strainFor = 0;
@@ -4171,7 +4347,11 @@
         // He hurries when he has dropped a long way behind and ambles when he
         // is already close, which is what stops the following looking robotic.
         // A squirrel is not an amble.
-        var v = goal.urgent ? DOG_SPEED * 1.4
+        // He comes back at the speed he thinks it is worth. Called from a long
+        // way off, a dog who loves you sprints and a dog who does not saunters,
+        // and that difference is felt long before the meter is read.
+        var eager = roam.recalling ? 0.9 + 0.75 * bondF() : 1.4;
+        var v = goal.urgent ? DOG_SPEED * eager
                             : Math.min(DOG_SPEED, Math.max(1.2, dist * 3.2));
         var step = Math.min(dist, v * dt);
         var nx = d.x + dx / dist * step, ny = d.y + dy / dist * step;
@@ -4198,11 +4378,12 @@
       // Off the lead in a park he is simply having a lovely time — but it is
       // the ground he covers that says so, not the clock. Paying by the second
       // would mean standing still in a park scored as well as a good run about.
-      if (roam.offLead && this.onPark(roam.x, roam.y)) {
+      if (roam.offLead && this.offLeadOk(roam.x, roam.y)) {
         roam.offLeadFor += dt;
         // Priced against a sniff: a good run about the park is worth a
-        // handful of lamp posts, not a hundred of them.
-        roam.joy += (d.ran || 0) * 0.05;
+        // handful of lamp posts, not a hundred of them. A dog who is enjoying
+        // it *with* you gets more out of it than one running off his lead.
+        roam.joy += (d.ran || 0) * 0.05 * (0.6 + 0.8 * bondF());
       }
       d.ran = 0;
 
@@ -4300,6 +4481,7 @@
           // You walked off. You are that person.
           roam.leftBehind++;
           roam.joy = Math.max(0, roam.joy - LEFT_PENALTY);
+          bond(BOND_LEFT);
           roam.mess = null;
           if (this.messGfx) this.messGfx.clear();
           toast("You left it. Somebody will step in that.");
@@ -4579,6 +4761,21 @@
       return !!w.park[ty * w.cols + tx];
     }
 
+    // Where the lead may come off. A park, always — and once he is steady with
+    // you, a proper footpath too, which is the reward for all that whistling
+    // and coming back. Never the pavement: that is a road with a kerb on it,
+    // and a loose dog beside traffic is not a thing this game will let you do
+    // however well he behaves.
+    offLeadOk(mx, my) {
+      if (this.onPark(mx, my)) return true;
+      if (bondF() < STEADY_BOND) return false;
+      var w = this.worldRef;
+      if (!w) return false;
+      var tx = Math.floor(mx / w.mpt), ty = Math.floor(my / w.mpt);
+      if (tx < 0 || ty < 0 || tx >= w.cols || ty >= w.rows) return false;
+      return w.kind[ty * w.cols + tx] === 6;
+    }
+
     // ---------- other people, out walking their own dogs ----------
 
     // Ground somebody would actually walk on: the pavement and the footpaths.
@@ -4753,6 +4950,106 @@
       }
     }
 
+    // ---------- fetch ----------
+
+    // The throw. It goes where you are facing, as far as it can before it hits
+    // something — a ball that sails through a garden wall is worse than a short
+    // throw, and a short throw in a walled park is a perfectly good throw.
+    throwBall() {
+      var far = THROW_M[0] + Math.random() * (THROW_M[1] - THROW_M[0]);
+      var hx = roam.hx, hy = roam.hy;
+      var hd = Math.hypot(hx, hy) || 1;
+      hx /= hd; hy /= hd;
+      var reach = 1;
+      for (var m = 1.5; m <= far; m += 0.5) {
+        if (this.dogBlocked(roam.x + hx * m, roam.y + hy * m)) break;
+        reach = m;
+      }
+      roam.ball = {
+        x: roam.x + hx * 1.0, y: roam.y + hy * 1.0,
+        fx: roam.x + hx * 1.0, fy: roam.y + hy * 1.0,
+        tx: roam.x + hx * reach, ty: roam.y + hy * reach,
+        state: "flying", t: 0, span: THROW_SECONDS * Math.min(1, reach / 14 + 0.4),
+        z: 0, ignore: 0, thrown: (roam.thrown || 0)
+      };
+      roam.thrown = (roam.thrown || 0) + 1;
+      roam.hasBall = false;
+      roam.dog.want = null; roam.dog.sniffFor = 0;
+      return reach;
+    }
+
+    updateBall(dt, scale) {
+      var b = roam.ball;
+      if (!b) { if (this.ballSpr) this.ballSpr.setVisible(false); return; }
+      if (!this.ballSpr) {
+        this.ballSpr = this.add.sprite(0, 0, "ball").setOrigin(0.5, 0.5).setDepth(100003);
+      }
+      if (b.ignore > 0) b.ignore -= dt;
+
+      if (b.state === "flying") {
+        b.t += dt;
+        var u = Math.min(1, b.t / b.span);
+        b.x = b.fx + (b.tx - b.fx) * u;
+        b.y = b.fy + (b.ty - b.fy) * u;
+        b.z = Math.sin(u * Math.PI) * 2.6;      // metres off the ground
+        if (u >= 1) { b.state = "down"; b.z = 0; }
+      } else if (b.state === "carried") {
+        // In his mouth, a nose ahead of him.
+        b.x = roam.dog.x + Math.cos(roam.dog.h) * 0.55;
+        b.y = roam.dog.y + Math.sin(roam.dog.h) * 0.55;
+        b.z = 0.35;
+      }
+
+      var d = roam.dog;
+      if (b.state === "down" && b.ignore <= 0 && roam.offLead &&
+          Math.hypot(d.x - b.x, d.y - b.y) < BALL_GRAB_M) {
+        b.state = "carried";
+        d.sniffFor = 0; d.want = null;
+      }
+
+      if (b.state === "carried" &&
+          Math.hypot(roam.x - d.x, roam.y - d.y) < BALL_BACK_M) {
+        // Whether he actually gives it to you is the bond in one gesture. A dog
+        // who has not decided about you yet would much rather be chased.
+        if (bondF() < KEEPAWAY_BOND && Math.random() < 0.55) {
+          var th = Math.random() * Math.PI * 2;
+          var kx = roam.x + Math.cos(th) * KEEPAWAY_M;
+          var ky = roam.y + Math.sin(th) * KEEPAWAY_M;
+          if (!this.dogBlocked(kx, ky)) { b.x = kx; b.y = ky; }
+          b.state = "down"; b.z = 0; b.ignore = 3.5;
+          roam.keepaways++;
+          roam.joy += 2;                        // he is having fun; you are not
+          this.floatText(d.x, d.y, "he wants you to chase him");
+        } else {
+          roam.ball = null;
+          roam.hasBall = true;
+          roam.fetches++;
+          roam.joy += FETCH_JOY;
+          bond(BOND_FETCH, "he brought it back");
+          this.floatText(d.x, d.y, "drops it at your feet");
+          this.ballSpr.setVisible(false);
+          updateRoamBar();
+          return;
+        }
+      }
+
+      // Walk over one he left lying and you have it back.
+      if (b.state === "down" && Math.hypot(roam.x - b.x, roam.y - b.y) < BALL_PICKUP_M) {
+        roam.ball = null;
+        roam.hasBall = true;
+        this.ballSpr.setVisible(false);
+        updateRoamBar();
+        return;
+      }
+
+      // Drawn a little larger and a little higher the further off the ground it
+      // is, which is the whole of the arc as far as the eye is concerned.
+      this.ballSpr.setVisible(true)
+        .setPosition(b.x * scale, (b.y - b.z) * scale)
+        .setScale(0.45 * (1 + b.z * 0.10))
+        .setDepth(b.state === "carried" ? 100003 : 99997);
+    }
+
     // A squirrel, which is the one thing on this map with an opinion of its own.
     // It bolts past, he goes after it, and you have about a second to take a
     // grip before the lead is out of your hand.
@@ -4775,10 +5072,15 @@
         }
         if (!found) { roam.nextSquirrel = 1.5; return; }
         var away = th + (Math.random() < 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.8);
+        // Whether he even goes for it is decided the moment it appears, and
+        // decided by the bond. Steady enough, and he watches it go past — the
+        // clearest possible sign that all that recall work took.
+        var steady = bondF() > 0.8 && Math.random() < (bondF() - 0.8) * 5;
         roam.squirrel = sq = { x: sx, y: sy, vx: Math.cos(away) * 9,
-                               vy: Math.sin(away) * 9, life: SQUIRREL_LIFE, ungripped: 0 };
+                               vy: Math.sin(away) * 9, life: SQUIRREL_LIFE,
+                               ungripped: 0, steady: steady, credited: false };
         this.critter.setVisible(true).play("bound");
-        toast("Squirrel!");
+        toast(steady ? "Squirrel — and he didn't even go" : "Squirrel!");
         return;
       }
 
@@ -4789,18 +5091,31 @@
       this.critter.setPosition(sq.x * scale, sq.y * scale)
                   .setRotation(Math.atan2(sq.vy, sq.vx));
 
-      // Grip the lead, or lose it.
-      if (!roam.offLead) {
+      // Grip the lead, or lose it. He sat and watched it: nothing to hold.
+      if (sq.steady) {
+        if (!sq.credited) {
+          sq.credited = true;
+          roam.steadied++;
+          roam.joy += 6;
+          bond(BOND_STEADY, "he let it go");
+          this.floatText(roam.dog.x, roam.dog.y, "he looks at you instead");
+        }
+      } else if (!roam.offLead) {
         if (roam.gripping) {
           roam.tension = 1;
         } else {
           sq.ungripped += dt;
-          if (sq.ungripped > SLIP_AFTER) {
+          // How long you have got before it is out of your hand. A dog who
+          // walks with you hesitates; one who does not is gone.
+          if (sq.ungripped > SLIP_AFTER * (0.7 + 1.1 * bondF())) {
             roam.offLead = true;
             roam.slipped++;
             roam.joy += 12;                 // he had the time of his life
             roam.warn = "He's off after it";
             toast("He's slipped the lead!");
+            // And he learned that going is an option, which is the expensive
+            // part — several recalls' worth.
+            bond(BOND_SLIP, "he learned he could just go");
           }
         }
       }
@@ -4812,12 +5127,13 @@
           Math.random() * (SQUIRREL_EVERY[1] - SQUIRREL_EVERY[0]);
         if (!roam.slipped || !roam.offLead) { roam.held++; roam.joy += 9; }
         // Gone up a tree. If he got loose, he comes back to you.
-        if (roam.offLead && roam.slipped && !this.onPark(roam.x, roam.y)) {
+        if (roam.offLead && roam.slipped && !this.offLeadOk(roam.x, roam.y)) {
           // He is thirty metres away with the lead trailing behind him. He
           // comes back — but he has to actually get here before he is back on
           // it, or the lead draws as a taut line across half a street.
           roam.recalling = true;
           roam.recallReason = "slip";
+          roam.recallFrom = 0; roam.recallBusy = false;
           roam.warn = "Calling him back";
           toast("Calling him back");
         }
@@ -5925,14 +6241,30 @@
     document.getElementById("roam-joy").style.setProperty(
       "--joy", Math.max(0, Math.min(100, walkRating().per / 15 * 100)) + "%");
 
+    // The bond does not move much in one walk, so it is shown against the
+    // words rather than the number — "still working you out" says more about
+    // what he is about to do than 31 does.
+    var bd = document.getElementById("roam-bond");
+    bd.style.setProperty("--bond", Math.round(state.bond || 0) + "%");
+    bd.classList.toggle("steady", bondF() >= STEADY_BOND);
+    bd.querySelector("span").textContent = bondWord();
+    bd.title = "How well he walks with you: " + bondWord() +
+      (bondF() >= STEADY_BOND ? " — steady enough for a footpath off the lead"
+                              : " — parks only until he settles");
+
     var lead = document.getElementById("btn-roam-lead");
-    var canUnclip = scene.onPark(roam.x, roam.y);
+    var canUnclip = scene.offLeadOk(roam.x, roam.y);
     lead.disabled = !roam.offLead && !canUnclip;
     lead.textContent = roam.offLead ? "Back on the lead" : "Off the lead";
     lead.classList.toggle("on", roam.offLead);
 
+    var throwBtn = document.getElementById("btn-throw");
+    throwBtn.disabled = !roam.hasBall || !roam.offLead;
+    throwBtn.textContent = roam.hasBall ? "Throw"
+      : (roam.ball && roam.ball.state === "carried") ? "He's got it" : "Ball's out";
+
     document.getElementById("btn-roam-hold")
-      .classList.toggle("off", !roam.squirrel || roam.offLead);
+      .classList.toggle("off", !roam.squirrel || roam.squirrel.steady || roam.offLead);
 
     var gap = Math.hypot(roam.x - roam.dog.x, roam.y - roam.dog.y);
     document.getElementById("btn-whistle").disabled = roam.whistleCool > 0;
@@ -5988,6 +6320,7 @@
       kpi(roam.met.length, "dog met", "dogs met") +
       kpi(roam.petted, "fuss", "fusses") +
       kpi(roam.questsDone, "favour done", "favours done") +
+      kpi(roam.fetches, "fetch", "fetches") +
       kpi(squirrels, "squirrel", "squirrels") +
       kpi(Math.round(roam.offLeadFor) + "s", "off the lead") +
       kpi(roam.refused, "thing walked past", "things walked past");
@@ -6023,7 +6356,29 @@
       " on the pavement. Not your finest hour.");
     if (roam.refused > 2) lines.push("You marched him past <b>" + roam.refused +
       "</b> things he badly wanted a look at.");
+    if (roam.fetches) lines.push("Brought the ball back " +
+      many(roam.fetches, "time", "times") + "." +
+      (roam.keepaways ? " Ran off with it " + many(roam.keepaways, "time", "times") + "." : ""));
+    else if (roam.keepaways) lines.push("Would not give you the ball back. " +
+      "He is still deciding about you.");
+    if (roam.steadied) lines.push("Watched " + many(roam.steadied, "squirrel", "squirrels") +
+      " go past without moving a muscle.");
     if (!lines.length) lines.push("Nothing much happened. Sometimes that is the walk.");
+
+    // The bond gets the last word, because it is the only thing on this card
+    // that is still true tomorrow.
+    var moved = Math.round(((state.bond || 0) - roam.bondAt) * 10) / 10;
+    var who = state.dogName || "He";
+    if (moved > 0.5) {
+      lines.push("<b>" + who + " trusts you a little more than he did.</b> " +
+        bondWord() + (bondF() >= STEADY_BOND && roam.bondAt / 100 < STEADY_BOND
+          ? " — steady enough now to walk a footpath off the lead." : "."));
+    } else if (moved < -0.5) {
+      lines.push("<b>He is less sure of you than when you set off.</b> " +
+        bondWord() + ".");
+    } else {
+      lines.push("Where you were with each other: <b>" + bondWord() + "</b>.");
+    }
     document.getElementById("card-log").innerHTML = lines.join("<br>");
 
     document.getElementById("roam-card").classList.add("open");
@@ -6150,7 +6505,8 @@
   function saveDogLook() {
     try {
       localStorage.setItem(LOOK_KEY, JSON.stringify({
-        type: state.dogType, coat: state.dogCoat, collar: state.dogCollar }));
+        type: state.dogType, coat: state.dogCoat, collar: state.dogCollar,
+        bond: state.bond }));
     } catch (e) { /* a full quota costs you the choice, not the walk */ }
   }
   function loadDogLook() {
@@ -6160,6 +6516,7 @@
       if (DOG_TYPES.indexOf(v.type) >= 0) state.dogType = v.type;
       if (DOG_COATS.indexOf(v.coat) >= 0) state.dogCoat = v.coat;
       if (COLLARS.some(function (c) { return c.key === v.collar; })) state.dogCollar = v.collar;
+      if (isFinite(v.bond)) state.bond = Math.max(0, Math.min(100, v.bond));
     } catch (e) { /* defaults are a black labrador in a green collar */ }
   }
 
@@ -6171,6 +6528,16 @@
     document.getElementById("roam-blurb").textContent =
       "Walk the real streets " + (state.dogName || "he") + " knows and " +
       (state.dogName ? "he" : "he") + " will follow you. Pick who is holding the lead.";
+    // Where you left off with him last time. It carries between walks, so it
+    // belongs on the way in rather than only on the way out.
+    var bl = document.getElementById("roam-bond-line");
+    if (bl) {
+      bl.textContent = (state.dogName || "He") + " is " + bondWord() + "." +
+        (bondF() >= STEADY_BOND
+          ? " Steady enough to be let off on a quiet footpath."
+          : " Reward him and he will start to walk with you off the lead.");
+      bl.classList.toggle("steady", bondF() >= STEADY_BOND);
+    }
     return who;
   }
 
@@ -6229,6 +6596,10 @@
     roam.greet = null; roam.greetFor = 0;
     roam.recalling = true;
     roam.recallReason = "whistle";
+    // Banked now, spent when he actually arrives — how far he came and whether
+    // he gave anything up to do it is only knowable from here.
+    roam.recallFrom = Math.hypot(roam.x - d.x, roam.y - d.y);
+    roam.recallBusy = interrupted;
     roam.warn = "Calling him back";
     if (scene) scene.floatText(roam.x, roam.y, "♪  whistle");
     // Cutting him off mid-sniff is not free — he was enjoying that.
@@ -6247,7 +6618,7 @@
     // He is delighted the first few times you stop to fuss him. By the
     // twentieth he is just standing there being fussed.
     var enough = roam.petted > PET_PAID;
-    if (!enough) roam.joy += PET_JOY;
+    if (!enough) { roam.joy += PET_JOY; bond(BOND_PET); }
     roam.dog.sniffFor = 0;
     comeToHeel(1.3);
     if (scene) {
@@ -6268,11 +6639,28 @@
     roam.treats--;
     roam.treatsGiven++;
     roam.joy += TREAT_JOY;
+    bond(BOND_TREAT);
     roam.energy = Math.min(100, roam.energy + 8);
     roam.dog.sniffFor = 0; roam.dog.want = null;
     comeToHeel(1.3);
     if (scene) scene.floatText(roam.dog.x, roam.dog.y, "✦ " + (state.dogName || "he") +
       " has a treat");
+    updateRoamBar();
+    return true;
+  }
+
+  // Fetch. Off the lead only — a dog on four metres of lead cannot fetch
+  // anything, and being told exactly that is the plainest signpost this game
+  // has towards finding a park and earning the right to unclip him.
+  function throwBall() {
+    if (!roam.on || !scene) return false;
+    if (!roam.hasBall) {
+      toast(roam.ball ? "He's got it" : "You haven't got the ball");
+      return false;
+    }
+    if (!roam.offLead) { toast("Let him off the lead first"); return false; }
+    var far = scene.throwBall();
+    scene.floatText(roam.x, roam.y, far < 6 ? "a wee lob" : "go on then");
     updateRoamBar();
     return true;
   }
@@ -6336,13 +6724,19 @@
   document.getElementById("btn-whistle").addEventListener("click", whistle);
   document.getElementById("btn-pet").addEventListener("click", petDog);
   document.getElementById("btn-treat").addEventListener("click", giveTreat);
+  document.getElementById("btn-throw").addEventListener("click", throwBall);
 
   document.getElementById("btn-roam-lead").addEventListener("click", function () {
     if (!roam.on) return;
     if (roam.offLead) {
+      // A good stretch off the lead with nothing going wrong is itself the
+      // thing that builds him — he was free, and he stayed with you.
+      if (roam.offLeadFor > 10) {
+        bond(Math.min(6, roam.offLeadFor / 20), "he stayed with you");
+      }
       roam.offLead = false; roam.warn = "";
       toast("Back on the lead");
-    } else if (scene.onPark(roam.x, roam.y)) {
+    } else if (scene.offLeadOk(roam.x, roam.y)) {
       roam.offLead = true;
       toast("Off he goes");
     }
@@ -6442,6 +6836,7 @@
       if (k2 === "t") { e.preventDefault(); giveTreat(); return true; }
       if (k2 === "r") { e.preventDefault(); restHere(); return true; }
       if (k2 === "g") { e.preventDefault(); bagIt(); return true; }
+      if (k2 === "b") { e.preventDefault(); throwBall(); return true; }
     }
     var dir = ROAM_KEYS[e.key];
     if (!dir) return false;
@@ -6617,7 +7012,9 @@
   window.dogwalk = { state: state, weatherAt: weatherAt, roam: roam,
                      dogFrame: dogFrame, collarFrame: collarFrame,
                      pace: { walk: WALK_MS, jog: JOG_MS },
-                     grade: function () { return scene && scene.gradeFX; } };
+                     grade: function () { return scene && scene.gradeFX; },
+                     bond: bond, bondF: bondF, bondWord: bondWord,
+                     STEADY_BOND: STEADY_BOND, throwBall: throwBall };
 
   loadRoamed();
   applyTrotFrames();

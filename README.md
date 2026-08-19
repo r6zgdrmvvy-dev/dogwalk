@@ -179,8 +179,8 @@ The choice is kept in `localStorage`, and the dog trotting on the loading screen
 is yours.
 
 `WASD` or the arrow keys, shift to jog, space to grip the lead, `C` to whistle,
-`F` for a fuss, `T` for a treat, `R` to sit down, `G` to pick up after him,
-`E` to let him off the lead, Escape to finish.
+`F` for a fuss, `T` for a treat, `B` to throw the ball, `R` to sit down, `G` to
+pick up after him, `E` to let him off the lead, Escape to finish.
 
 Pace is set by how long the screen takes to cross, not by metres per second. At
 a realistic 2.2 m/s and sixty metres of view that was twenty-seven seconds —
@@ -311,11 +311,50 @@ past means he does not get to say hello. Nervous dogs are a real thing, so a shy
 one's owner gives you a wide berth and says why, and their dog is never made to
 greet yours.
 
-**Off the lead.** Only in a park, which is the actual rule. Off it he ranges
-much further, goes for things he could never reach on the lead, and earns by the
-ground he covers rather than by the clock — paying by the second would mean
-standing still in a park scored as well as a good run about. Wander off the park
-with him still loose and the bar tells you to clip him back on.
+**Off the lead.** A park always; a proper footpath once he is steady enough with
+you — see the bond, below. Never the pavement, however well he behaves: that is
+a road with a kerb on it. Off the lead he ranges further, goes for things he
+could never reach on it, and earns by the ground he covers rather than by the
+clock — paying by the second would mean standing still in a park scored as well
+as a good run about. Wander somewhere he should not be loose and the bar tells
+you to clip him back on.
+
+**The bond.** The one number that carries between walks, and the only one that
+is still true tomorrow. Everything a dog would count as being worth coming back
+for puts it up — a whistle answered, a treat, a fuss, a ball brought back, a
+stretch off the lead that ended with him still beside you — and everything that
+teaches him otherwise puts it down: slipping the lead after a squirrel, being
+marched past one more thing he wanted, mess left on the pavement.
+
+It is not a score. It is what he does when nothing is holding him:
+
+- **How far he goes.** Off the lead he keeps himself inside a radius that shrinks
+  from about thirty-four metres to a dozen as he settles with you, and pootles
+  about correspondingly close when you stop. Barely listening, he is a speck at
+  the far end of the park and you have to whistle him; inseparable, he is
+  checking back every few seconds without being asked.
+- **How fast he comes.** Called from a long way off, a dog who loves you sprints
+  and one who does not saunters. Felt long before the meter is read.
+- **Whether he goes at all.** A squirrel gives you about a second to take a grip;
+  well bonded it is more like two and a half, and past eighty he sometimes just
+  watches it go and looks at you instead.
+- **Where he may be let off.** Past sixty-five, a footpath will do as well as a
+  park. That is the unlock the whole thing is aiming at.
+
+Deliberately slow: a good walk moves it ten or fifteen points, so a dog you can
+trust in the open is several walks of work rather than one treat. Losing him
+costs more than one recall earns, or the cheapest route to a perfect dog would
+be to keep losing him. It lives in `localStorage` beside his breed and collar,
+because it belongs to the dog rather than to the walk.
+
+**Fetch.** A ball goes in your pocket at the start of every walk, and it only
+comes out when he is off the lead — a dog on four metres of lead cannot fetch
+anything, and being told exactly that is the plainest signpost the game has
+towards finding a park and earning the right to unclip him. The throw goes where
+you are facing, as far as it can before it hits something; a short throw in a
+walled park is a perfectly good throw. Whether he actually gives it back is the
+bond in one gesture: under about a third he would far rather be chased, drops it
+five metres away and waits for you to come and get it.
 
 **Afterwards** you get a verdict, rated on how good a walk it was for *him* —
 joy per hundred metres, not distance, because the question is not how far you
@@ -551,6 +590,22 @@ phase off its position so a row of them ripples rather than nodding in unison.
 Only the ones on screen, and only when you are zoomed in far enough to see it —
 pulled back to the whole map a tree is two pixels and rotating three thousand of
 them is work nobody can see.
+
+### Depth
+
+Close in, a band through whoever you are following stays sharp and everything
+above and below it goes soft, with a touch more colour in the blur. It is the
+tilt-shift trick, and it is what makes a photograph of a town read as a
+photograph of a *model* of a town — the single cheapest thing available for
+making a flat top-down map look like a place with air in it.
+
+The strength is driven by how many metres of street are visible across the
+viewport rather than by zoom, because zoom is relative to the size of the world
+and a postcode map is not the size of a walk: it comes in below two hundred
+metres across and is at full strength by ninety. Both the strength and the
+height of the focus band are eased, so a pinch does not snap the whole frame in
+and out of focus. It costs eight extra texture reads, and only where the blur is
+actually non-zero — pulled back to the map, the branch never runs at all.
 
 ## Tests
 
