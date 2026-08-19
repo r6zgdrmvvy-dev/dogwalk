@@ -2426,6 +2426,13 @@
   // Bloom on the bright stuff, a touch of contrast, vignette and film
   // grain. Pixel art rendered flat looks like a spritesheet; a grade makes
   // it look photographed.
+  //
+  // Plus a tilt-shift: close in, everything above and below a band through
+  // whoever you are following goes soft, the way a macro lens throws a real
+  // street out of focus. It is what makes a photograph of a town read as a
+  // photograph of a model of a town, and it costs eight extra texture reads
+  // only where the blur is actually non-zero. Far out — the map view — the
+  // strength is zero and the branch never runs.
   var GradeFX = null;
   if (window.Phaser && Phaser.Renderer && Phaser.Renderer.WebGL &&
       Phaser.Renderer.WebGL.Pipelines && Phaser.Renderer.WebGL.Pipelines.PostFXPipeline) {
@@ -2437,11 +2444,29 @@
             "precision mediump float;",
             "uniform sampler2D uMainSampler;",
             "uniform float uTime;",
+            "uniform float uTilt;",
+            "uniform float uFocus;",
             "varying vec2 outTexCoord;",
             "float rand(vec2 c){ return fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453); }",
             "void main() {",
             "  vec2 uv = outTexCoord;",
             "  vec4 col = texture2D(uMainSampler, uv);",
+            "  float defocus = uTilt * smoothstep(0.13, 0.50, abs(uv.y - uFocus));",
+            "  if (defocus > 0.004) {",
+            "    float r = defocus * 0.0055;",
+            "    vec4 acc = col * 0.30;",
+            "    acc += texture2D(uMainSampler, uv + vec2( r,  0.0)) * 0.115;",
+            "    acc += texture2D(uMainSampler, uv + vec2(-r,  0.0)) * 0.115;",
+            "    acc += texture2D(uMainSampler, uv + vec2(0.0,  r)) * 0.115;",
+            "    acc += texture2D(uMainSampler, uv + vec2(0.0, -r)) * 0.115;",
+            "    acc += texture2D(uMainSampler, uv + vec2( r*0.7,  r*0.7)) * 0.060;",
+            "    acc += texture2D(uMainSampler, uv + vec2(-r*0.7,  r*0.7)) * 0.060;",
+            "    acc += texture2D(uMainSampler, uv + vec2( r*0.7, -r*0.7)) * 0.060;",
+            "    acc += texture2D(uMainSampler, uv + vec2(-r*0.7, -r*0.7)) * 0.060;",
+            "    col = acc;",
+            "    float sg = dot(col.rgb, vec3(0.299, 0.587, 0.114));",
+            "    col.rgb = mix(vec3(sg), col.rgb, 1.0 + defocus * 0.22);",
+            "  }",
             "  vec3 b = texture2D(uMainSampler, uv + vec2( 0.0020, 0.0)).rgb",
             "         + texture2D(uMainSampler, uv + vec2(-0.0020, 0.0)).rgb",
             "         + texture2D(uMainSampler, uv + vec2(0.0,  0.0026)).rgb",
@@ -2460,7 +2485,11 @@
           ].join("\n")
         });
       }
-      onPreRender() { this.set1f("uTime", this.game.loop.time * 0.001); }
+      onPreRender() {
+        this.set1f("uTime", this.game.loop.time * 0.001);
+        this.set1f("uTilt", this.tilt || 0);
+        this.set1f("uFocus", this.focus === undefined ? 0.5 : this.focus);
+      }
     };
   }
 
@@ -2818,6 +2847,8 @@
 
       if (GradeFX && this.renderer && this.renderer.type === Phaser.WEBGL) {
         this.cameras.main.setPostPipeline(GradeFX);
+        this.gradeFX = this.cameras.main.getPostPipeline(GradeFX) || null;
+        if (Array.isArray(this.gradeFX)) this.gradeFX = this.gradeFX[0] || null;
       }
 
       this.events.on(Phaser.Scenes.Events.POST_UPDATE, this.syncCollar, this);
@@ -2869,6 +2900,28 @@
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, S, S);
       tex.refresh();
+    }
+
+    // The tilt-shift band, driven by how much street you can actually see and
+    // by where the thing you are following sits on the screen. Measured in
+    // metres across the viewport rather than in zoom, because zoom is relative
+    // to the size of the world and a postcode map is not the size of a walk.
+    updateGrade() {
+      var gr = this.gradeFX;
+      if (!gr) return;
+      var cam = this.cameras.main, v = cam.worldView;
+      var mps = this.worldScale || 1;
+      var visM = v.width / mps;
+      var want = Math.max(0, Math.min(1, (200 - visM) / 110)) * 0.85;
+      // Eased, so a pinch-zoom does not snap the whole frame in and out of
+      // focus a frame at a time.
+      gr.tilt = gr.tilt === undefined ? want : gr.tilt + (want - gr.tilt) * 0.12;
+
+      var subj = (roam.on && this.walker && this.walker.visible) ? this.walker : this.dog;
+      var f = 0.5;
+      if (subj && v.height > 0) f = (subj.y - v.y) / v.height;
+      f = Math.max(0.24, Math.min(0.76, f));
+      gr.focus = gr.focus === undefined ? f : gr.focus + (f - gr.focus) * 0.18;
     }
 
     // One per moving thing, kept glued underneath it. Squashed, because a
@@ -4926,6 +4979,7 @@
       this.updateLights();
       this.updateContactShadows();
       this.swayTrees(time);
+      this.updateGrade();
       this.handlePinch();
       if (roam.on) { this.updateRoam(delta); return; }
       if (!pb.playing || !pb.walk) return;
@@ -6562,7 +6616,8 @@
   // for tests
   window.dogwalk = { state: state, weatherAt: weatherAt, roam: roam,
                      dogFrame: dogFrame, collarFrame: collarFrame,
-                     pace: { walk: WALK_MS, jog: JOG_MS } };
+                     pace: { walk: WALK_MS, jog: JOG_MS },
+                     grade: function () { return scene && scene.gradeFX; } };
 
   loadRoamed();
   applyTrotFrames();
