@@ -272,6 +272,21 @@ and every target is a real building off the OSM tags rather than an invented
 waypoint. Calling at a shop completes from the pavement outside, because its
 label sits at the centre of the building, which is inside the walls.
 
+**Racing a walk he really did.** The ⛳ on any walk in the list sets you off
+against a translucent ghost of him following the line he actually took, and
+draws that line faintly so you can see where you are meant to be going. He runs
+at eight times his own recorded pace, floored above your walking speed and
+capped below your jog, so a long slow amble is not won by strolling and a brisk
+one is not unwinnable — you have to work at it.
+
+Your progress is how far along *his* route you have got, not how far you have
+wandered, and it only advances a couple of hundred metres ahead of where you
+last were: cutting across the middle of a loop cannot credit you with the far
+side of it, because you were never on the part you skipped. Nor does simply
+being near the finish end it — almost every dog walk is a loop that starts and
+ends at his front door, so the finish line sits on the start line, and an
+earlier version had the race over before it began.
+
 **Squirrels.** Every half-minute or so one bolts past. He is after it instantly
 and you have about a second to grip the lead — hold space, or the button that
 appears. Grip it and he strains but stays. Miss it and he slips the lead and is

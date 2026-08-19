@@ -151,6 +151,12 @@
   .walk.active { background: rgba(232,163,61,0.3); }
   .walk .d { font-size: 13px; font-weight: 700; }
   .walk .m { font-size: 11px; opacity: 0.65; }
+  .race-btn {
+    background: transparent; border: 1px solid var(--panel-edge); color: #9fd0ff;
+    border-radius: 6px; font: inherit; font-size: 13px; padding: 1px 6px;
+    margin-right: 7px; cursor: pointer; flex: none;
+  }
+  .race-btn:hover { border-color: #9fd0ff; }
 
   #transport {
     background: var(--panel); border: 2px solid var(--panel-edge); border-radius: 12px;
@@ -204,6 +210,17 @@
   #roam-energy span { font-size: 10px; opacity: 0.6; }
   #btn-bag.off { display: none; }
   #btn-bag.urgent { background: var(--accent); color: #2a1c0a; border-color: var(--accent-dark); }
+
+  /* How the race is going: one line, because it is one number. */
+  #race {
+    position: fixed; z-index: 19; left: 50%; transform: translateX(-50%); top: 14px;
+    background: var(--panel); border: 2px solid #4c7ea8; border-radius: 10px;
+    padding: 6px 14px; font-size: 13px; display: none; white-space: nowrap;
+  }
+  #race.on { display: block; }
+  #race b { color: #9fd0ff; }
+  #race.ahead b { color: var(--good); }
+  #race.behind b { color: #f0a08c; }
 
   /* Favours people have asked of you. Top-left under the stats, out of the way
      of the transport bar, and capped at three so it never becomes a wall. */
@@ -530,6 +547,8 @@
     <button class="btn" id="btn-stop">✕</button>
   </div>
 </div>
+
+<div id="race"></div>
 
 <div id="quests"></div>
 
@@ -2570,6 +2589,19 @@
   // shops and halls the map already knows the names of. Every target is a real
   // place off the OSM tags or a real person walking a real dog, so a quest is
   // never "go to the marker" — it is "pop into the library".
+  // Racing a walk he actually did. The ghost follows the routed line at the
+  // same sixth-of-real-time compression playback uses, which comes out around
+  // 8 m/s — between your walking pace and your jog, so it is a race you can
+  // lose. Your progress is how far along *his* route you have got, not how far
+  // you have wandered, so cutting the corner off a loop gains you nothing.
+  // Eight, not six: at six a 33-minute walk comes out at 5.2 m/s, which is
+  // slower than you walk, so you would win it strolling. At eight it is about
+  // 7 m/s — above your walk and below your jog, so you have to work at it.
+  var RACE_SPEEDUP = 8;
+  var RACE_LOOKAHEAD = 15;                   // ~200m of routed line
+  var RACE_ON_ROUTE_M = 26;                  // near enough to count as following it
+  var RACE_FINISH_M = 20;
+
   var QUEST_MAX = 3;
   // How near counts as arriving, by what you are arriving at. A named place is
   // a whole building and its label sits at the centre of it — which is inside
@@ -2625,6 +2657,7 @@
     energy: 100, resting: false, restedFor: 0, rests: 0,
     nextGo: 0, mess: null, carrying: false, pickedUp: 0, leftBehind: 0, binned: 0,
     quests: [], questsDone: 0, questSeq: 0, askedAt: {},
+    race: null,
     squirrel: null, nextSquirrel: 30, gripping: false,
     interests: null, buckets: null, warn: "",
     keys: {},                                // held keys, by direction
@@ -3554,6 +3587,7 @@
       roam.mess = null; roam.carrying = false;
       roam.pickedUp = 0; roam.leftBehind = 0; roam.binned = 0;
       roam.quests = []; roam.questsDone = 0; roam.questSeq = 0; roam.askedAt = {};
+      roam.race = null;
       roam.startedAt = Date.now();
       roam.lastTick = 0;
       this.buildInterests();
@@ -3600,6 +3634,8 @@
       roam.greet = null;
       if (this.walker) this.walker.setVisible(false);
       if (this.critter) this.critter.setVisible(false);
+      if (this.ghost) this.ghost.setVisible(false);
+      if (this.raceGfx) this.raceGfx.clear();
       if (this.leadGfx) this.leadGfx.clear();
       var cam = this.cameras.main;
       cam.stopFollow();
@@ -3690,6 +3726,7 @@
       this.updateStamina(total, moved);
       this.updateBusiness(total, scale);
       this.updateQuests(total);
+      this.updateRace(total, scale);
       this.updateSquirrel(total, scale);
       this.updateNpcs(total, scale);
       this.updateRoamDog(total, scale);
@@ -4002,6 +4039,129 @@
         }
       } else if (this.messGfx) {
         this.messGfx.clear();
+      }
+    }
+
+    // ---------- racing a walk he really did ----------
+
+    // Turn a routed walk into a polyline in metres, with the cumulative length
+    // along it, so the ghost can be placed by distance and your own progress
+    // can be measured as "how far along his route" rather than "how far away".
+    raceRoute(points) {
+      var w = this.worldRef;
+      if (!w || !points || points.length < 2) return null;
+      var pts = [], run = [0], total = 0;
+      for (var i = 0; i < points.length; i++) {
+        var m = w.toM(points[i].lat, points[i].lng);
+        pts.push({ x: m.x, y: m.y });
+        if (i > 0) {
+          total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+          run.push(total);
+        }
+      }
+      return { pts: pts, run: run, total: total };
+    }
+
+    beginRace(walkIndex, points) {
+      var route = this.raceRoute(points);
+      if (!route || route.total < 60) return null;
+      var mins = (new Date(points[points.length - 1].t) - new Date(points[0].t)) / 60000;
+      roam.race = {
+        index: walkIndex, route: route, at: 0, mine: 0, elapsed: 0,
+        // Floored above your walking pace and capped below your jog, so a long
+        // slow amble is not won by strolling and a brisk one is not unwinnable.
+        pace: Math.max(WALK_MS * 1.12,
+              Math.min(JOG_MS * 0.85,
+                       route.total / Math.max(1, (mins * 60) / RACE_SPEEDUP))),
+        done: false, beat: false, hisMins: mins
+      };
+      // Line you up on his starting spot.
+      var start = this.nearestOpen(route.pts[0].x, route.pts[0].y);
+      roam.x = start.x; roam.y = start.y;
+      roam.dog.x = start.x; roam.dog.y = start.y;
+      roam.trail = [];
+      if (!this.ghost) {
+        this.ghost = this.add.sprite(0, 0, "dogs").setOrigin(0.5, 0.5).setDepth(99996);
+      }
+      this.ghost.setFrame(dogFrame(state.dogType, state.dogCoat))
+        .setAlpha(0.42).setTint(0x9fd0ff).setVisible(true);
+      if (!this.raceGfx) this.raceGfx = this.add.graphics().setDepth(99989);
+      this.drawRaceLine();
+      return roam.race;
+    }
+
+    // His route, drawn faintly, so you can see where you are meant to be going.
+    drawRaceLine() {
+      if (!this.raceGfx || !roam.race) return;
+      var g = this.raceGfx, scale = this.worldScale, r = roam.race.route;
+      g.clear();
+      g.lineStyle(Math.max(1, scale * 0.3), 0x9fd0ff, 0.3);
+      g.beginPath();
+      g.moveTo(r.pts[0].x * scale, r.pts[0].y * scale);
+      for (var i = 1; i < r.pts.length; i++) {
+        g.lineTo(r.pts[i].x * scale, r.pts[i].y * scale);
+      }
+      g.strokePath();
+    }
+
+    // Where along the route a given distance falls.
+    alongRoute(route, dist) {
+      var run = route.run, pts = route.pts;
+      if (dist <= 0) return { x: pts[0].x, y: pts[0].y, i: 0 };
+      if (dist >= route.total) {
+        return { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y, i: pts.length - 1 };
+      }
+      var lo = 0, hi = run.length - 1;
+      while (lo < hi - 1) {
+        var mid = (lo + hi) >> 1;
+        if (run[mid] <= dist) lo = mid; else hi = mid;
+      }
+      var seg = run[hi] - run[lo] || 1, f = (dist - run[lo]) / seg;
+      return { x: pts[lo].x + (pts[hi].x - pts[lo].x) * f,
+               y: pts[lo].y + (pts[hi].y - pts[lo].y) * f, i: lo };
+    }
+
+    updateRace(dt, scale) {
+      var race = roam.race;
+      if (!race || race.done) return;
+      race.elapsed += dt;
+      race.at = Math.min(race.route.total, race.at + race.pace * dt);
+      var g = this.alongRoute(race.route, race.at);
+      this.ghost.setPosition(g.x * scale, g.y * scale).setVisible(true);
+
+      // Your own progress: the furthest point on his route you have actually
+      // been near. Measured forward only, so wandering back does not undo it,
+      // and only while you are on the route — a shortcut across the middle of
+      // a loop gains you nothing, because you were never on the bit you skipped.
+      var pts = race.route.pts, run = race.route.run;
+      // Only a short way ahead of where you last were. The routed line is
+      // densified every ~14m, so fifteen points is about two hundred metres —
+      // enough slack for the odd corner cut, not enough to walk across the
+      // middle of a loop and be credited with the whole far side of it.
+      var from = this.raceIdx || 0;
+      for (var i = from; i < pts.length && i <= from + RACE_LOOKAHEAD; i++) {
+        if (Math.hypot(pts[i].x - roam.x, pts[i].y - roam.y) < RACE_ON_ROUTE_M) {
+          if (run[i] > race.mine) { race.mine = run[i]; this.raceIdx = i; }
+        }
+      }
+
+      // Being near the last point is not enough: almost every dog walk is a
+      // loop that starts and ends at his front door, so the finish line sits
+      // right on the start line and the race was over before it began. You
+      // have to have actually got round it.
+      var last = pts[pts.length - 1];
+      if (race.mine > race.route.total * 0.85 &&
+          Math.hypot(last.x - roam.x, last.y - roam.y) < RACE_FINISH_M) {
+        race.done = true;
+        race.beat = race.at < race.route.total;
+        roam.joy += race.beat ? 45 : 20;
+        this.ghost.setVisible(false);
+        this.raceGfx.clear();
+        toast(race.beat ? "You beat him home!" : "He got there first");
+        this.floatText(roam.x, roam.y, race.beat ? "✓ won" : "beaten");
+      } else if (race.at >= race.route.total && !race.done) {
+        // He has finished and you have not. Keep going; the ghost waits.
+        this.ghost.setAlpha(0.25);
       }
     }
 
@@ -4750,13 +4910,18 @@
       var shown = (pb.index === i && pb.walk) ? pb.walk : walk;
       var wx = weatherOver(walk);
       var glyph = weatherGlyph(wx);
-      row.innerHTML = '<div><div class="d">' + fmtDate(walk[0].t) +
+      row.innerHTML = '<button class="race-btn" data-race="' + i +
+        '" title="Race this walk">\u26f3</button>' +
+        '<div><div class="d">' + fmtDate(walk[0].t) +
         (glyph ? ' <span class="wx" title="' + describeWeather(wx) + '">' + glyph + '</span>' : '') +
         '</div>' +
         '<div class="m">' + walkKm(shown).toFixed(1) + ' km · ' + mins + ' min' +
         (wx ? ' · ' + Math.round(wx.temp) + '°C' : '') + '</div></div>' +
         '<div style="font-size:15px">▶</div>';
-      row.addEventListener("click", function () { startWalk(i); });
+      row.addEventListener("click", function (e) {
+        if (e.target.classList.contains("race-btn")) { raceWalk(i); return; }
+        startWalk(i);
+      });
       el.appendChild(row);
     });
   }
@@ -5420,6 +5585,56 @@
     return m < 1000 ? Math.round(m) + " m" : (m / 1000).toFixed(2) + " km";
   }
 
+  // Race one of his real walks: build that walk's world, put you on his
+  // starting line, and set a ghost of him off along the route he actually took.
+  function raceWalk(i) {
+    if (!scene) return;
+    if (pb.walk) stopWalk();
+    var walk = state.walks[i];
+    if (!walk || walk.length < 2) { toast("Not enough of that walk to race"); return; }
+
+    var go = function () {
+      var route = routedWalk(i) || walk;
+      if (!roam.on) {
+        var who = document.querySelector("#roam-who .who.on");
+        if (!scene.beginRoam(who ? who.getAttribute("data-who") : "her")) {
+          toast("No map to race on yet");
+          return;
+        }
+        document.getElementById("roam-bar").classList.remove("off");
+        document.getElementById("btn-roam").classList.add("on");
+        scene.setTimeOfDay(new Date().toISOString());
+      }
+      var race = scene.beginRace(i, route);
+      if (!race) { toast("That walk is too short to race"); return; }
+      document.getElementById("walks").classList.add("hidden");
+      renderRace();
+      toast("Off you go — beat him to the end");
+    };
+
+    // The world has to be his walk's world, or his route is off the edge of it.
+    var want = boundsForWalk(walk);
+    if (sameBounds(want, state.bounds)) { go(); return; }
+    state.bounds = want;
+    state.activeWalk = i;
+    showLoader("Getting that walk's map");
+    rebuildFromData().then(function () { hideLoader(); go(); });
+  }
+
+  function renderRace() {
+    var el = document.getElementById("race");
+    var r = roam.race;
+    el.classList.toggle("on", !!(roam.on && r && !r.done));
+    if (!r || r.done) return;
+    var lead = r.mine - r.at;
+    el.classList.toggle("ahead", lead > 0);
+    el.classList.toggle("behind", lead <= 0);
+    var pct = Math.min(100, Math.round(r.mine / r.route.total * 100));
+    el.innerHTML = "Racing " + fmtDate(state.walks[r.index][0].t) + " &nbsp;·&nbsp; <b>" +
+      (lead >= 0 ? Math.round(lead) + "m ahead" : Math.round(-lead) + "m behind") +
+      "</b> &nbsp;·&nbsp; " + pct + "%";
+  }
+
   function renderQuests() {
     var el = document.getElementById("quests");
     el.classList.toggle("on", roam.on && roam.quests.length > 0);
@@ -5462,6 +5677,8 @@
     var rest = document.getElementById("btn-rest");
     rest.textContent = roam.resting ? "Up" : "Sit";
     rest.disabled = !roam.resting && !scene.benchNear();
+
+    renderRace();
 
     var bag = document.getElementById("btn-bag");
     bag.classList.toggle("off", !roam.mess && !roam.carrying);
@@ -5705,6 +5922,7 @@
     var walked = roam.metres;
     roam.keys = {}; roam.stick = null; roam.gripping = false; hideStick();
     roam.quests = []; renderQuests();
+    roam.race = null; renderRace();
     saveRoamed();
     scene.endRoam();
     document.getElementById("roam-bar").classList.add("off");

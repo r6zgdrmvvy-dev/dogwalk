@@ -920,6 +920,69 @@ async function waitForReady(page) {
     check("where you walked is remembered", after.roamed > 0 && after.saved === after.roamed,
           JSON.stringify(after));
 
+    // Racing a walk he really did. The ghost follows the routed line at eight
+    // times his own pace, which lands between your walk and your jog.
+    check("every walk offers a race", await page.evaluate(() =>
+      document.querySelectorAll(".race-btn").length) === 6);
+    await page.evaluate(() => {
+      document.getElementById("walks").classList.remove("hidden");
+      document.querySelector(".walk .race-btn").click();
+    });
+    await page.waitForFunction(() => !!window.dogwalk.roam.race, null, { timeout: 45000 });
+    await page.waitForTimeout(1500);
+    const race = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      return { total: r.race.route.total, pace: r.race.pace, mine: r.race.mine,
+               ghost: s.ghost.visible, roaming: r.on,
+               strip: document.getElementById("race").classList.contains("on"),
+               walk: window.dogwalk.pace.walk, jog: window.dogwalk.pace.jog };
+    });
+    check("racing sets you off against a ghost of him",
+          race.roaming && race.ghost && race.strip && race.total > 100,
+          JSON.stringify({ total: Math.round(race.total), ghost: race.ghost }));
+    // Slower than you walk and it is won by strolling; faster than you jog and
+    // it cannot be won at all.
+    check("the ghost is quicker than a walk and slower than a jog",
+          race.pace > race.walk && race.pace < race.jog,
+          race.pace.toFixed(1) + " m/s vs walk " + race.walk + " jog " + race.jog);
+
+    const along = async (frac) => page.evaluate((f) => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      const g = s.alongRoute(r.race.route, r.race.route.total * f);
+      r.x = g.x; r.y = g.y;
+    }, frac);
+    for (let f = 0.04; f <= 0.28; f += 0.04) { await along(f); await page.waitForTimeout(320); }
+    const covered = await page.evaluate(() => window.dogwalk.roam.race.mine);
+    check("following his route counts as progress", covered > race.total * 0.15,
+          Math.round(covered) + "m of " + Math.round(race.total));
+
+    // Cutting across the middle of a loop must gain nothing: you were never on
+    // the part you skipped.
+    await along(0.95);
+    await page.waitForTimeout(1000);
+    const cut = await page.evaluate(() => window.dogwalk.roam.race.mine);
+    // The claim is not that a shortcut gains nothing at all — the look-ahead is
+    // deliberately a couple of hundred metres so a corner cut still counts, and
+    // on a loop route distant parts genuinely pass close to each other. The
+    // claim is that skipping to the end does not credit you with the middle.
+    check("a shortcut does not credit the part you skipped",
+          cut < race.total * 0.75,
+          Math.round(covered) + "m → " + Math.round(cut) + "m of " +
+          Math.round(race.total) + " after jumping to 95%");
+
+    for (let f = 0.3; f <= 1.0; f += 0.03) { await along(f); await page.waitForTimeout(180); }
+    await page.waitForTimeout(800);
+    const won = await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      return { done: r.race.done, beat: r.race.beat, ghost: s.ghost.visible,
+               strip: document.getElementById("race").classList.contains("on") };
+    });
+    check("reaching the end finishes the race",
+          won.done && !won.ghost && !won.strip, JSON.stringify(won));
+    await page.click("#btn-roam-stop");
+    await page.waitForTimeout(400);
+    await page.click("#btn-card-close").catch(() => {});
+
     // Somewhere to walk with no data at all. The geocoders are stubbed with
     // their real response shapes — this runs offline, and postcodes.io is a
     // third party we should not be hammering from a test.
