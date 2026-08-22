@@ -2780,6 +2780,8 @@
   var CAR_GAP_M = 34;                        // nose to tail on the same lane
   var CAR_SEE_M = 190;                       // spawn and despawn radius
   var HEADLIGHT_ON = 0.35;                   // darkness above which they come on
+  // The same three fog steps the parked cars and the street furniture use.
+  var CAR_FOG = [0x8a92a4, 0xb4bac8, 0xffffff];
 
   // Fetch. A ball goes in your pocket at the start of every walk, and it only
   // comes out when he is off the lead — a dog on a two-metre lead cannot fetch
@@ -3111,16 +3113,21 @@
       this.blobs = this.blobs || [];
       var scale = this.worldScale || 1, k = 0;
       var self = this;
-      var put = function (spr, wide) {
+      var put = function (spr, wide, tall, groundY) {
         if (!spr || !spr.visible) return;
         var b = self.blobs[k];
         if (!b) {
           b = self.add.image(0, 0, "blob").setOrigin(0.5).setDepth(99980);
           self.blobs.push(b);
         }
+        // `tall` for the things that are longer north-south than east-west —
+        // a car pointing up the street, mostly. `groundY` for anything drawn
+        // above where it actually is: a shadow belongs at the point on the
+        // ground, not under the sprite that has been lifted off it.
         b.setVisible(true)
-         .setPosition(spr.x + scale * 0.35, spr.y + scale * 0.5)
-         .setDisplaySize(wide * scale, wide * scale * 0.55);
+         .setPosition(spr.x + scale * 0.35,
+                      (groundY === undefined ? spr.y : groundY) + scale * 0.5)
+         .setDisplaySize(wide * scale, (tall === undefined ? wide * 0.55 : tall) * scale);
         k++;
       };
       put(this.walker, 1.5);
@@ -3131,6 +3138,21 @@
         put(n.spr.owner, 1.5);
         put(n.spr.dog, 1.7);
       });
+      // The moving cars too. The parked ones have theirs painted into the tile,
+      // so a car that drives past without one is the one thing on the street
+      // that looks pasted on.
+      (this.cars || []).forEach(function (c) {
+        put(c.spr, c.lane.h ? 4.6 : 2.2, c.lane.h ? 2.2 : 4.6);
+      });
+      // And the ball. Its shadow stays on the ground while the ball rises off
+      // it, and tightens as it goes up — which is the only thing telling you it
+      // is in the air rather than sliding along the grass.
+      var bl = roam.ball;
+      if (this.ballSpr && this.ballSpr.visible && bl) {
+        var high = Math.max(0, Math.min(1, bl.z / 2.6));
+        var wide2 = 0.85 - high * 0.35;
+        put(this.ballSpr, wide2, wide2 * 0.55, bl.y * scale);
+      }
       for (var j = k; j < this.blobs.length; j++) this.blobs[j].setVisible(false);
     }
 
@@ -3320,6 +3342,13 @@
         var car = this.cars[j];
         var sx = car.x * scale, sy = car.y * scale;
         car.spr.setVisible(true).setPosition(sx, sy).setDepth(sy - 0.4);
+        // Dimmed to match the ground it is on, exactly as the parked cars are.
+        // Without it a car drives out of a lit street into ground neither of
+        // you has ever seen, at full brightness, and gives the fog away.
+        var ctx2 = Math.floor(car.x / w.mpt), cty = Math.floor(car.y / w.mpt);
+        if (ctx2 >= 0 && cty >= 0 && ctx2 < w.cols && cty < w.rows) {
+          car.spr.setTint(CAR_FOG[w.seen[cty * w.cols + ctx2]]);
+        }
         if (!car.beam) continue;
         if (night <= 0.02) { car.beam.setVisible(false); car.tail.setVisible(false); continue; }
         var ax = car.lane.h ? car.dir : 0, ay = car.lane.h ? 0 : car.dir;
@@ -4259,6 +4288,10 @@
       roam.greet = null;
       if (this.walker) this.walker.setVisible(false);
       if (this.critter) this.critter.setVisible(false);
+      // The ball goes back in your pocket. Without this it is left lying in the
+      // park, on a map nobody is walking about on any more.
+      roam.ball = null; roam.hasBall = true;
+      if (this.ballSpr) this.ballSpr.setVisible(false);
       if (this.ghost) this.ghost.setVisible(false);
       if (this.raceGfx) this.raceGfx.clear();
       if (this.leadGfx) this.leadGfx.clear();

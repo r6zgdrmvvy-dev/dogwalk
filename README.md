@@ -612,7 +612,11 @@ street it is decided by position, so a given street always flows the same way.
 
 Deliberately sparse: five on screen at most, arriving one at a time with a gap
 between, because filling the quota on the first frame gives you a convoy rather
-than a street with cars on it. Nothing makes the carriageway solid — you are
+than a street with cars on it. How far out to bother is the view's own width
+when that is wider than a couple of streets, or cars pop in and out well inside
+the frame you are looking at. They are dimmed by the fog exactly as the parked
+ones are — a car driving into ground neither of you has ever seen, at full
+brightness, gives the whole thing away. Nothing makes the carriageway solid — you are
 allowed to walk in the road — so a car stops for you and for the dog rather than
 driving through the pair of you.
 
@@ -630,7 +634,11 @@ always had.
 Everything that stands on the ground gets a soft contact shadow under it,
 offset south-east to agree with the light the whole tileset is drawn under.
 Without one a sprite reads as pasted onto the tiles rather than standing on
-them; it is the cheapest thing available for how much it buys.
+them; it is the cheapest thing available for how much it buys. A car pointing
+up the street gets one longer than it is wide, and the ball keeps its shadow on
+the ground it came off while the ball itself rises — tightening as it goes up,
+which is the only thing telling you it is in the air rather than sliding along
+the grass.
 
 Trees sway in whatever wind the archive recorded for that hour, each on its own
 phase off its position so a row of them ripples rather than nodding in unison.

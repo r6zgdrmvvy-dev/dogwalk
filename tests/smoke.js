@@ -1041,6 +1041,21 @@ async function waitForReady(page) {
     check("the ball goes where you are facing", flew.thrown && flew.far > 1 &&
           !flew.hasBall && flew.tx > flew.x - 0.01, JSON.stringify(flew));
     if (flew.thrown) {
+      // Mid-flight the shadow stays on the ground the ball came off, which is
+      // the only thing saying it is in the air rather than sliding along.
+      check("the ball throws a shadow, and leaves it on the ground",
+            await page.evaluate(() => {
+              const s = window.game.scene.getScene("world"), b = window.dogwalk.roam.ball;
+              if (!b || b.state !== "flying" || b.z < 0.4) return true;
+              s.updateContactShadows();
+              const sh = (s.blobs || []).filter((x) => x.visible).sort((p, q) =>
+                Math.hypot(p.x - b.x * s.worldScale, p.y - b.y * s.worldScale) -
+                Math.hypot(q.x - b.x * s.worldScale, q.y - b.y * s.worldScale))[0];
+              if (!sh) return false;
+              // On the ground point, not under the lifted sprite.
+              return Math.abs(sh.y - b.y * s.worldScale) < s.worldScale * 1.2 &&
+                     sh.y > s.ballSpr.y;
+            }));
       check("it lands, and nowhere solid", await page.evaluate(async () => {
         const d = window.dogwalk, s = window.game.scene.getScene("world");
         await new Promise((go) => setTimeout(go, 1200));
@@ -1078,8 +1093,22 @@ async function waitForReady(page) {
     }
 
     // Ground you covered yourself counts as explored, and survives a reload.
+    // Throw the ball just before finishing, so the tidy-up on the way out has
+    // something to tidy: left as it was, it sits in the park for the rest of
+    // the session on a map nobody is walking about on.
+    await page.evaluate(() => {
+      const d = window.dogwalk, r = d.roam;
+      r.offLead = true; r.hasBall = true; r.ball = null;
+      d.throwBall();
+    });
+    await page.waitForTimeout(200);
     await page.click("#btn-roam-stop");
     await page.waitForTimeout(500);
+    check("the ball comes home with you", await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), r = window.dogwalk.roam;
+      return !r.ball && r.hasBall && (!s.ballSpr || !s.ballSpr.visible);
+    }), await page.evaluate(() => JSON.stringify({
+      ball: !!window.dogwalk.roam.ball, has: window.dogwalk.roam.hasBall })));
     const after = await page.evaluate(() => ({
       on: window.dogwalk.roam.on,
       barOff: document.getElementById("roam-bar").classList.contains("off"),
@@ -1292,6 +1321,44 @@ async function waitForReady(page) {
       return { frames: Object.keys(seen).length, tiles: s.waterTiles.length };
     });
     check("water moves", ripple.none === true || ripple.frames > 1, JSON.stringify(ripple));
+
+    // A car that drives out of a lit street into ground neither of you has ever
+    // seen, at full brightness, gives the fog away.
+    check("traffic is dimmed by the fog like everything else", await page.evaluate(() => {
+      const s = window.game.scene.getScene("world"), w = s.worldRef;
+      const cars = s.cars || [];
+      if (!cars.length) return true;
+      return cars.every((c) => {
+        const tx = Math.floor(c.x / w.mpt), ty = Math.floor(c.y / w.mpt);
+        const seen = w.seen[ty * w.cols + tx];
+        const want = [0x8a92a4, 0xb4bac8, 0xffffff][seen];
+        return c.spr.tintTopLeft === want;
+      });
+    }), await page.evaluate(() => (window.game.scene.getScene("world").cars || [])
+      .map((c) => c.spr.tintTopLeft.toString(16)).join(" ")));
+
+    // The parked cars have their shadow painted into the tile; a moving one
+    // without one is the only thing on the street that looks pasted on.
+    const carShade = await page.evaluate(async () => {
+      const s = window.game.scene.getScene("world");
+      s.updateContactShadows();
+      const cars = s.cars || [];
+      if (!cars.length) return { none: true };
+      const under = cars.filter((c) => (s.blobs || []).some((b) =>
+        b.visible && Math.hypot(b.x - c.spr.x, b.y - c.spr.y) < s.worldScale * 2)).length;
+      // A car pointing up the street needs a shadow longer than it is wide.
+      const ns = cars.find((c) => !c.lane.h);
+      const shape = ns ? (s.blobs || []).find((b) => b.visible &&
+        Math.hypot(b.x - ns.spr.x, b.y - ns.spr.y) < s.worldScale * 2) : null;
+      return { n: cars.length, under,
+               nsTaller: shape ? shape.displayHeight > shape.displayWidth : null };
+    });
+    check("moving cars stand on the road rather than over it",
+          carShade.none === true || carShade.under === carShade.n,
+          JSON.stringify(carShade));
+    check("and one pointing up the street casts a shadow that way",
+          carShade.none === true || carShade.nsTaller !== false,
+          JSON.stringify(carShade));
 
     // Racing a walk he really did. The ghost follows the routed line at eight
     // times his own pace, which lands between your walk and your jog.
