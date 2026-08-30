@@ -74,6 +74,38 @@ async function stub(page) {
   }
   await page.route("https://fonts.googleapis.com/**", (r) => r.abort());
   await page.route("https://fonts.gstatic.com/**", (r) => r.abort());
+  // The geocoders, from the very start now: the first thing a new player sees
+  // is a box asking where they walk, so nothing at all happens without these.
+  // An invented postcode over the fixture town — not a real residential one.
+  await page.route("https://api.postcodes.io/**", (r) => {
+    const u = r.request().url();
+    if (/TE5/i.test(u)) {
+      return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        status: 200, result: { postcode: "TE5 1ST", latitude: 55.796151,
+          longitude: -4.292285, admin_ward: "Testville" } }) });
+    }
+    return r.fulfill({ status: 404, contentType: "application/json",
+                       body: JSON.stringify({ status: 404, error: "Postcode not found" }) });
+  });
+  await page.route("https://nominatim.openstreetmap.org/**", (r) =>
+    r.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
+}
+
+// First run: name the dog, say where you walk, get a town and six made-up
+// walks in it. Every desktop check below starts from the other side of this.
+async function firstRun(page, name, expectWalks) {
+  await page.waitForSelector("#welcome.open", { timeout: 45000 });
+  await page.fill("#welcome-name", name || "Rusty");
+  await page.fill("#welcome-place", "TE5 1ST");
+  await page.click("#btn-welcome-go");
+  // With no map to be had there are no streets to invent a walk along, so the
+  // panel closing is all there is to wait for — you still get plain ground and
+  // a dog to walk on it.
+  await page.waitForFunction(
+    (want) => !document.getElementById("welcome").classList.contains("open") &&
+              (!want || window.dogwalk.state.walks.length > 0),
+    expectWalks !== false, { timeout: 90000 });
+  await page.waitForTimeout(800);
 }
 
 // The splash only clears once the first map has arrived and the scene is up.
@@ -95,19 +127,60 @@ async function waitForReady(page) {
     page.on("pageerror", (e) => errors.push(String(e.message)));
     await stub(page);
     await page.goto(base);
+
+    // A stranger's first run. There is deliberately nothing to look at until
+    // they say where they walk — what used to be here was one real dog's real
+    // GPS, which is fine for its owner and wrong for everybody else.
+    check("a new player is asked where they walk, not shown someone else's dog",
+          await page.evaluate(() =>
+            document.getElementById("welcome").classList.contains("open")));
+    check("and no real walk data ships with the game", await page.evaluate(() =>
+      window.dogwalk.state.points.length === 0 && window.dogwalk.state.walks.length === 0));
+    await firstRun(page, "Rusty");
     await waitForReady(page);
 
-    const boot = await page.evaluate(() => ({
-      pct: document.getElementById("boot-pct").textContent,
-      walks: document.querySelectorAll(".walk").length,
-      km: parseFloat(document.getElementById("s-dist").textContent),
-      canvas: !!document.querySelector("#game canvas"),
-      fitted: Math.abs(window.game.scene.getScene("world").cameras.main.zoom -
-                       window.game.scene.getScene("world").fitZoom) < 1e-6,
-    }));
+    const boot = await page.evaluate(() => {
+      const st = window.dogwalk.state;
+      const km = (pts) => { let m = 0;
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], c = pts[i];
+          m += Math.hypot((c.lng - a.lng) * 111320 * Math.cos(a.lat * Math.PI / 180),
+                          (c.lat - a.lat) * 111320);
+        }
+        return m / 1000; };
+      const w = window.__world;
+      let onOpen = 0;
+      st.points.forEach((p) => {
+        const m = w.toM(p.lat, p.lng);
+        const tx = Math.floor(m.x / w.mpt), ty = Math.floor(m.y / w.mpt);
+        if (tx < 0 || ty < 0 || tx >= w.cols || ty >= w.rows) return;
+        if (!w.solid[ty * w.cols + tx]) onOpen++;
+      });
+      return {
+        pct: document.getElementById("boot-pct").textContent,
+        walks: document.querySelectorAll(".walk").length,
+        km: parseFloat(document.getElementById("s-dist").textContent),
+        canvas: !!document.querySelector("#game canvas"),
+        fitted: Math.abs(window.game.scene.getScene("world").cameras.main.zoom -
+                         window.game.scene.getScene("world").fitZoom) < 1e-6,
+        name: st.dogName, isDemo: st.isDemo === true,
+        points: st.points.length, onOpen: onOpen,
+        lengths: st.walks.map((x) => +km(x).toFixed(2)),
+        hours: st.walks.map((x) => x[0].t.slice(11, 13)),
+      };
+    });
     check("splash reaches 100%", boot.pct === "100%", boot.pct);
-    check("bundled walks are found", boot.walks === 6, boot.walks + " rows");
-    check("distance is plausible", boot.km > 5 && boot.km < 40, boot.km + " km");
+    check("the town is named after your dog", boot.name === "Rusty", boot.name);
+    check("demo walks are made up on your own streets",
+          boot.isDemo && boot.walks >= 4, boot.walks + " rows");
+    check("and they run along the streets, not through the houses",
+          boot.points > 0 && boot.onOpen === boot.points,
+          boot.onOpen + " of " + boot.points + " fixes on open ground");
+    check("they vary in length, so one walk looks unlike another",
+          Math.max(...boot.lengths) > Math.min(...boot.lengths) * 2.5,
+          boot.lengths.join(", ") + " km");
+    check("and in time of day", new Set(boot.hours).size >= 4, boot.hours.join(" "));
+    check("distance is plausible", boot.km > 2 && boot.km < 40, boot.km + " km");
     check("canvas exists", boot.canvas);
     check("opens zoomed to fit", boot.fitted);
 
@@ -1488,25 +1561,10 @@ async function waitForReady(page) {
     await page.waitForTimeout(400);
     await page.click("#btn-card-close").catch(() => {});
 
-    // Somewhere to walk with no data at all. The geocoders are stubbed with
-    // their real response shapes — this runs offline, and postcodes.io is a
-    // third party we should not be hammering from a test.
-    await page.route("https://api.postcodes.io/**", (r) => {
-      const u = r.request().url();
-      if (/G46/.test(u)) {
-        return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-          status: 200, result: { postcode: "G46 6QE", latitude: 55.796151,
-            longitude: -4.292285, admin_ward: "Giffnock and Thornliebank" } }) });
-      }
-      return r.fulfill({ status: 404, contentType: "application/json",
-                         body: JSON.stringify({ status: 404, error: "Postcode not found" }) });
-    });
-    await page.route("https://nominatim.openstreetmap.org/**", (r) =>
-      r.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
-
+    // Moving the whole world somewhere else, from the data panel.
     await page.click("#btn-data");
     await page.waitForTimeout(300);
-    await page.fill("#place-input", "G46 6QE");
+    await page.fill("#place-input", "TE5 1ST");
     await page.click("#btn-place");
     await page.waitForFunction(
       () => window.dogwalk.state.placeLabel && window.__world &&
@@ -1623,9 +1681,19 @@ async function waitForReady(page) {
       await off.route("https://" + host + "/api/interpreter", (r) => r.abort());
     }
     await off.route("https://fonts.googleapis.com/**", (r) => r.abort());
+    await off.route("https://api.postcodes.io/**", (r) =>
+      r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        status: 200, result: { postcode: "TE5 1ST", latitude: 55.796151,
+          longitude: -4.292285, admin_ward: "Testville" } }) }));
     await off.goto(base);
     await waitForReady(off);
-    check("still playable without a map", (await off.$$(".walk")).length === 6);
+    await firstRun(off, "Rusty", false);
+    // No streets to invent a walk along, so there are no walks — but there is
+    // still a world, and you can still take him out in it.
+    check("still playable without a map", await off.evaluate(() => {
+      const s = window.game.scene.getScene("world");
+      return !!s.worldRef && !document.getElementById("welcome").classList.contains("open");
+    }));
     check("no page errors", offErrors.length === 0, offErrors.slice(0, 2).join(" | "));
     await off.close();
 
@@ -1637,6 +1705,9 @@ async function waitForReady(page) {
     await stub(m);
     await m.goto(base);
     await waitForReady(m);
+    check("the welcome fits a phone", !(await m.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth + 1)));
+    await firstRun(m, "Rusty");
     check("no horizontal overflow", !(await m.evaluate(
       () => document.documentElement.scrollWidth > window.innerWidth + 1)));
     check("walks panel starts closed", await m.evaluate(

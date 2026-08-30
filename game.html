@@ -437,6 +437,31 @@
   #stats-table th { color: var(--ink-3); font-weight: 600; }
   #stats-table td { font-variant-numeric: tabular-nums; }
 
+  /* First run. Nobody has been here before, so this is the whole of the game
+     until they say where they walk. */
+  #welcome {
+    position: fixed; z-index: 42; inset: 0; display: none;
+    background: rgba(8,6,4,0.88); align-items: center; justify-content: center; padding: 20px;
+  }
+  #welcome.open { display: flex; }
+  #welcome .card {
+    background: #1c1713; border: 2px solid var(--panel-edge); border-radius: 14px;
+    padding: 20px; width: min(430px, 100%);
+  }
+  #welcome h2 { margin: 0 0 8px; font-size: 22px; }
+  #welcome p { margin: 0 0 14px; font-size: 13px; opacity: 0.78; line-height: 1.5; }
+  #welcome p.fine { margin: 12px 0 0; font-size: 11px; opacity: 0.5; }
+  #welcome .field { display: block; font-size: 12px; opacity: 0.75; margin-bottom: 12px; }
+  #welcome .field input {
+    display: block; width: 100%; margin-top: 5px; background: #12100e; color: var(--ink);
+    border: 2px solid var(--panel-edge); border-radius: 8px; padding: 9px 10px;
+    font: inherit; font-size: 14px; box-sizing: border-box;
+  }
+  #welcome .row { display: flex; gap: 8px; }
+  #welcome .row .btn { flex: 1; }
+  #welcome-msg { font-size: 12px; margin-top: 9px; min-height: 16px; color: #e88; }
+  #welcome-msg.busy { color: var(--accent); }
+
   #data-panel {
     position: fixed; z-index: 40; inset: 0; display: none;
     background: rgba(8,6,4,0.72); align-items: center; justify-content: center; padding: 20px;
@@ -656,6 +681,27 @@
   </div>
 </div>
 
+<div id="welcome">
+  <div class="card">
+    <h2>A walk with your dog</h2>
+    <p>Your own streets, drawn as a little pixel town off the real map — the
+      houses, the shops, the lamp posts, the weather that was actually doing
+      that day. Then you take the dog out in it.</p>
+    <label class="field">What's your dog called?
+      <input type="text" id="welcome-name" placeholder="Your dog's name" maxlength="24">
+    </label>
+    <label class="field">Where do you walk?
+      <input type="text" id="welcome-place" placeholder="A UK postcode, e.g. SW1A 1AA" maxlength="60">
+    </label>
+    <div class="row">
+      <button class="btn primary" id="btn-welcome-go">Build my town</button>
+    </div>
+    <div id="welcome-msg"></div>
+    <p class="fine">Nothing is uploaded. Everything stays in this browser until
+      you make an account.</p>
+  </div>
+</div>
+
 <div id="data-panel">
   <div class="card">
     <h2>Where are you walking?</h2>
@@ -663,7 +709,7 @@
        streets, the shops, the lamp posts — about a kilometre square. No tracker
        and no data needed. Then press <b>Roam</b>.</p>
     <div class="row">
-      <input type="text" id="place-input" placeholder="e.g. G46 6QE" maxlength="60">
+      <input type="text" id="place-input" placeholder="e.g. SW1A 1AA" maxlength="60">
       <button class="btn primary" id="btn-place">Take me there</button>
     </div>
     <div id="place-msg"></div>
@@ -682,8 +728,8 @@
     <pre id="sync-how" hidden>python3 scripts/export_tractive.py --serve</pre>
 
     <h3 class="sub">Or paste it in yourself</h3>
-    <p>GPS points as <code>[{"lat":55.79,"lng":-4.29,"t":"2026-08-10T07:12:00Z"}]</code>,
-       or load a <code>guinness_walk.json</code> exported by <code>scripts/export_tractive.py</code>.</p>
+    <p>GPS points as <code>[{"lat":51.50,"lng":-0.14,"t":"2026-08-10T07:12:00Z"}]</code>,
+       or load the <code>walks.json</code> written by <code>scripts/export_tractive.py</code>.</p>
     <label class="field">Your dog's name
       <input type="text" id="dog-name" placeholder="Your Dog" maxlength="24">
     </label>
@@ -692,7 +738,7 @@
       <button class="btn primary" id="btn-load">Load pasted</button>
       <label class="btn" for="json-file">Load file…</label>
       <input type="file" id="json-file" accept="application/json,.json">
-      <button class="btn" id="btn-demo">Reset to samples</button>
+      <button class="btn" id="btn-demo" title="Six made-up walks on these streets">Make demo walks</button>
       <button class="btn" id="btn-close-data" style="margin-left:auto">Close</button>
     </div>
     <div id="data-msg"></div>
@@ -1309,148 +1355,117 @@
       ");out geom;";
   }
 
-  // Six of Guinness's real walks around Giffnock, straight from a Tractive
-  // export, chosen to span the things that make one walk look different from
-  // another: a dawn outing at 05:55 and an evening one at 17:34, four and a half
-  // kilometres down to a five-hundred-metre pootle round the block, and weather
-  // from clear to properly wet. "Load data" replaces them with your own dog's.
-  var SAMPLE_WALKS = [
-    [
-      {"lat":55.797732,"lng":-4.293663,"t":"2026-07-25T10:05:20Z"},
-      {"lat":55.797890,"lng":-4.291739,"t":"2026-07-25T10:07:39Z"},
-      {"lat":55.798197,"lng":-4.289925,"t":"2026-07-25T10:10:08Z"},
-      {"lat":55.797130,"lng":-4.288305,"t":"2026-07-25T10:12:37Z"},
-      {"lat":55.797286,"lng":-4.286455,"t":"2026-07-25T10:15:08Z"},
-      {"lat":55.798581,"lng":-4.287889,"t":"2026-07-25T10:17:38Z"},
-      {"lat":55.799928,"lng":-4.287162,"t":"2026-07-25T10:20:08Z"},
-      {"lat":55.800941,"lng":-4.288524,"t":"2026-07-25T10:22:43Z"},
-      {"lat":55.801230,"lng":-4.287306,"t":"2026-07-25T10:25:10Z"},
-      {"lat":55.800397,"lng":-4.285283,"t":"2026-07-25T10:27:42Z"},
-      {"lat":55.800341,"lng":-4.284206,"t":"2026-07-25T10:30:09Z"},
-      {"lat":55.800381,"lng":-4.284479,"t":"2026-07-25T10:30:35Z"},
-      {"lat":55.800368,"lng":-4.284344,"t":"2026-07-25T10:30:39Z"},
-      {"lat":55.800318,"lng":-4.284081,"t":"2026-07-25T10:30:43Z"},
-      {"lat":55.800184,"lng":-4.283879,"t":"2026-07-25T10:30:47Z"},
-      {"lat":55.800136,"lng":-4.283853,"t":"2026-07-25T10:30:51Z"},
-      {"lat":55.800239,"lng":-4.284064,"t":"2026-07-25T10:30:55Z"},
-      {"lat":55.800363,"lng":-4.284233,"t":"2026-07-25T10:30:59Z"},
-      {"lat":55.799963,"lng":-4.283208,"t":"2026-07-25T10:32:39Z"},
-      {"lat":55.799818,"lng":-4.281340,"t":"2026-07-25T10:35:10Z"},
-      {"lat":55.800325,"lng":-4.280973,"t":"2026-07-25T10:37:39Z"},
-      {"lat":55.801036,"lng":-4.281662,"t":"2026-07-25T10:40:09Z"},
-      {"lat":55.801423,"lng":-4.281763,"t":"2026-07-25T10:42:38Z"},
-      {"lat":55.801652,"lng":-4.283256,"t":"2026-07-25T10:45:11Z"},
-      {"lat":55.802438,"lng":-4.283154,"t":"2026-07-25T10:47:38Z"},
-      {"lat":55.802854,"lng":-4.282939,"t":"2026-07-25T10:50:08Z"},
-      {"lat":55.802724,"lng":-4.282399,"t":"2026-07-25T10:52:38Z"},
-      {"lat":55.802698,"lng":-4.282389,"t":"2026-07-25T10:55:09Z"},
-      {"lat":55.802296,"lng":-4.281491,"t":"2026-07-25T10:57:39Z"},
-      {"lat":55.802839,"lng":-4.281033,"t":"2026-07-25T11:00:18Z"},
-      {"lat":55.803772,"lng":-4.282430,"t":"2026-07-25T11:02:39Z"},
-      {"lat":55.805195,"lng":-4.282418,"t":"2026-07-25T11:05:09Z"},
-      {"lat":55.805952,"lng":-4.283480,"t":"2026-07-25T11:07:39Z"},
-      {"lat":55.806310,"lng":-4.285301,"t":"2026-07-25T11:10:09Z"},
-      {"lat":55.806414,"lng":-4.286857,"t":"2026-07-25T11:12:39Z"},
-      {"lat":55.806192,"lng":-4.289369,"t":"2026-07-25T11:15:11Z"},
-      {"lat":55.805350,"lng":-4.291459,"t":"2026-07-25T11:17:39Z"},
-      {"lat":55.806242,"lng":-4.293702,"t":"2026-07-25T11:20:12Z"},
-      {"lat":55.805061,"lng":-4.294525,"t":"2026-07-25T11:22:42Z"},
-      {"lat":55.804418,"lng":-4.294564,"t":"2026-07-25T11:25:09Z"},
-      {"lat":55.804332,"lng":-4.295310,"t":"2026-07-25T11:27:47Z"},
-      {"lat":55.804366,"lng":-4.294889,"t":"2026-07-25T11:30:09Z"},
-      {"lat":55.803588,"lng":-4.294749,"t":"2026-07-25T11:32:40Z"},
-      {"lat":55.802110,"lng":-4.295036,"t":"2026-07-25T11:35:11Z"},
-      {"lat":55.801153,"lng":-4.295253,"t":"2026-07-25T11:37:42Z"},
-      {"lat":55.799788,"lng":-4.295673,"t":"2026-07-25T11:40:14Z"},
-      {"lat":55.798476,"lng":-4.295170,"t":"2026-07-25T11:42:40Z"},
-      {"lat":55.797817,"lng":-4.293592,"t":"2026-07-25T11:45:10Z"}
-    ],
-    [
-      {"lat":55.797314,"lng":-4.293796,"t":"2026-07-30T16:57:39Z"},
-      {"lat":55.797879,"lng":-4.292223,"t":"2026-07-30T17:00:06Z"},
-      {"lat":55.797959,"lng":-4.290364,"t":"2026-07-30T17:02:32Z"},
-      {"lat":55.797114,"lng":-4.288247,"t":"2026-07-30T17:05:03Z"},
-      {"lat":55.797113,"lng":-4.286639,"t":"2026-07-30T17:07:39Z"},
-      {"lat":55.797579,"lng":-4.286599,"t":"2026-07-30T17:09:06Z"},
-      {"lat":55.798358,"lng":-4.287689,"t":"2026-07-30T17:10:01Z"},
-      {"lat":55.799547,"lng":-4.287837,"t":"2026-07-30T17:12:32Z"},
-      {"lat":55.800450,"lng":-4.287936,"t":"2026-07-30T17:15:04Z"},
-      {"lat":55.801429,"lng":-4.287818,"t":"2026-07-30T17:17:32Z"},
-      {"lat":55.800724,"lng":-4.286104,"t":"2026-07-30T17:20:02Z"},
-      {"lat":55.801300,"lng":-4.284604,"t":"2026-07-30T17:22:32Z"},
-      {"lat":55.801137,"lng":-4.282805,"t":"2026-07-30T17:25:02Z"},
-      {"lat":55.801479,"lng":-4.281004,"t":"2026-07-30T17:27:32Z"},
-      {"lat":55.800648,"lng":-4.281375,"t":"2026-07-30T17:30:01Z"},
-      {"lat":55.800949,"lng":-4.282757,"t":"2026-07-30T17:32:36Z"},
-      {"lat":55.801015,"lng":-4.285361,"t":"2026-07-30T17:35:05Z"},
-      {"lat":55.801287,"lng":-4.287178,"t":"2026-07-30T17:37:21Z"},
-      {"lat":55.801295,"lng":-4.287519,"t":"2026-07-30T17:37:34Z"},
-      {"lat":55.801372,"lng":-4.288352,"t":"2026-07-30T17:38:21Z"},
-      {"lat":55.800887,"lng":-4.290233,"t":"2026-07-30T17:40:02Z"},
-      {"lat":55.800372,"lng":-4.293772,"t":"2026-07-30T17:42:36Z"},
-      {"lat":55.800314,"lng":-4.295432,"t":"2026-07-30T17:44:10Z"},
-      {"lat":55.799645,"lng":-4.296051,"t":"2026-07-30T17:45:17Z"},
-      {"lat":55.798220,"lng":-4.295138,"t":"2026-07-30T17:47:47Z"},
-      {"lat":55.797772,"lng":-4.293541,"t":"2026-07-30T17:50:08Z"}
-    ],
-    [
-      {"lat":55.795718,"lng":-4.291617,"t":"2026-07-31T14:32:44Z"},
-      {"lat":55.795243,"lng":-4.290060,"t":"2026-07-31T14:35:06Z"},
-      {"lat":55.795009,"lng":-4.289127,"t":"2026-07-31T14:37:36Z"},
-      {"lat":55.795059,"lng":-4.289179,"t":"2026-07-31T14:40:05Z"},
-      {"lat":55.795098,"lng":-4.289099,"t":"2026-07-31T14:42:37Z"},
-      {"lat":55.795063,"lng":-4.289130,"t":"2026-07-31T14:45:08Z"},
-      {"lat":55.795023,"lng":-4.289237,"t":"2026-07-31T14:47:37Z"},
-      {"lat":55.795085,"lng":-4.289214,"t":"2026-07-31T14:50:06Z"},
-      {"lat":55.795189,"lng":-4.289522,"t":"2026-07-31T14:52:38Z"},
-      {"lat":55.795382,"lng":-4.290439,"t":"2026-07-31T14:55:04Z"},
-      {"lat":55.796013,"lng":-4.292621,"t":"2026-07-31T14:58:02Z"},
-      {"lat":55.795677,"lng":-4.293754,"t":"2026-07-31T15:00:07Z"}
-    ],
-    [
-      {"lat":55.797859,"lng":-4.292247,"t":"2026-08-03T17:34:31Z"},
-      {"lat":55.798086,"lng":-4.290287,"t":"2026-08-03T17:36:58Z"},
-      {"lat":55.797135,"lng":-4.288270,"t":"2026-08-03T17:39:28Z"},
-      {"lat":55.797545,"lng":-4.286557,"t":"2026-08-03T17:41:58Z"},
-      {"lat":55.798165,"lng":-4.287344,"t":"2026-08-03T17:44:31Z"},
-      {"lat":55.799426,"lng":-4.288929,"t":"2026-08-03T17:47:00Z"},
-      {"lat":55.801023,"lng":-4.290471,"t":"2026-08-03T17:49:32Z"},
-      {"lat":55.800614,"lng":-4.292474,"t":"2026-08-03T17:51:58Z"},
-      {"lat":55.800424,"lng":-4.295237,"t":"2026-08-03T17:54:28Z"},
-      {"lat":55.798682,"lng":-4.296193,"t":"2026-08-03T17:56:59Z"},
-      {"lat":55.796906,"lng":-4.297374,"t":"2026-08-03T17:59:34Z"},
-      {"lat":55.797788,"lng":-4.294991,"t":"2026-08-03T18:02:02Z"},
-      {"lat":55.797069,"lng":-4.293770,"t":"2026-08-03T18:04:30Z"}
-    ],
-    [
-      {"lat":55.797336,"lng":-4.293748,"t":"2026-08-04T07:43:08Z"},
-      {"lat":55.798122,"lng":-4.294986,"t":"2026-08-04T07:45:15Z"},
-      {"lat":55.799727,"lng":-4.295810,"t":"2026-08-04T07:47:47Z"},
-      {"lat":55.801398,"lng":-4.295223,"t":"2026-08-04T07:50:14Z"},
-      {"lat":55.803069,"lng":-4.294859,"t":"2026-08-04T07:52:44Z"},
-      {"lat":55.804360,"lng":-4.294818,"t":"2026-08-04T07:55:39Z"},
-      {"lat":55.803574,"lng":-4.294571,"t":"2026-08-04T07:57:45Z"},
-      {"lat":55.801680,"lng":-4.295057,"t":"2026-08-04T08:00:15Z"},
-      {"lat":55.799610,"lng":-4.295618,"t":"2026-08-04T08:02:51Z"},
-      {"lat":55.798085,"lng":-4.294201,"t":"2026-08-04T08:05:15Z"}
-    ],
-    [
-      {"lat":55.797294,"lng":-4.293823,"t":"2026-08-13T05:55:03Z"},
-      {"lat":55.797916,"lng":-4.292474,"t":"2026-08-13T05:57:30Z"},
-      {"lat":55.797960,"lng":-4.291820,"t":"2026-08-13T06:00:01Z"},
-      {"lat":55.798016,"lng":-4.290370,"t":"2026-08-13T06:02:29Z"},
-      {"lat":55.797553,"lng":-4.288890,"t":"2026-08-13T06:04:59Z"},
-      {"lat":55.796891,"lng":-4.289032,"t":"2026-08-13T06:07:29Z"},
-      {"lat":55.797299,"lng":-4.290086,"t":"2026-08-13T06:09:59Z"},
-      {"lat":55.797952,"lng":-4.291783,"t":"2026-08-13T06:12:30Z"},
-      {"lat":55.798016,"lng":-4.294156,"t":"2026-08-13T06:15:06Z"},
-      {"lat":55.798692,"lng":-4.295442,"t":"2026-08-13T06:17:39Z"},
-      {"lat":55.798298,"lng":-4.296524,"t":"2026-08-13T06:20:03Z"},
-      {"lat":55.797795,"lng":-4.296721,"t":"2026-08-13T06:22:33Z"},
-      {"lat":55.798067,"lng":-4.294760,"t":"2026-08-13T06:25:02Z"},
-      {"lat":55.797491,"lng":-4.293788,"t":"2026-08-13T06:27:33Z"}
-    ]
+  // Demo walks, made up on the spot. There used to be six real trails from a
+  // real collar here, which was fine while this was one person's toy and quite
+  // wrong the moment anyone else could open it: a walk trail is where somebody
+  // actually lives, and shipping one in a public repo is shipping their front
+  // door. These are generated instead, on the real streets of wherever *you*
+  // said you walk, so the demo still shows what the game does — playback, the
+  // stats, racing a ghost — without being anybody's history.
+  var DEMO_SPEC = [
+    { km: 4.4, hour: 5,  min: 55 },     // the long dawn one
+    { km: 2.8, hour: 17, min: 34 },     // after work
+    { km: 1.9, hour: 12, min: 10 },
+    { km: 1.5, hour: 8,  min: 20 },
+    { km: 1.1, hour: 19, min: 5  },
+    { km: 0.7, hour: 22, min: 40 }      // a pootle round the block
   ];
+  // A collar reports every couple of minutes, so that is what these do. Sparse
+  // on purpose: it is what real data looks like, and it means the demo goes
+  // through the same street-routing everything else does rather than taking a
+  // shortcut no real walk would have.
+  var DEMO_FIX_S = 95;
+  var DEMO_PACE = 1.35;                 // m/s including stopping to sniff
+  var DEMO_JITTER = 0.000018;           // ~2m of GPS wobble, in degrees
+
+  // A seeded shuffle of the street graph: start somewhere near the middle and
+  // wander, preferring roads not yet taken, until the distance is used up. It
+  // comes out looking like a walk because it is one — the same graph the real
+  // fixes get snapped to.
+  function makeDemoWalks(ways, centre) {
+    var g = buildWalkGraph(ways);
+    if (!g || !g.nodes.length) return [];
+    var seed = 20260830;
+    var rnd = function () {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    // Start from the node nearest the middle of the map, so a demo walk begins
+    // where the town is rather than out at the edge of the download.
+    var start = 0, best = Infinity;
+    for (var n = 0; n < g.nodes.length; n++) {
+      var d0 = haversineKm(g.nodes[n], centre);
+      if (d0 < best) { best = d0; start = n; }
+    }
+    var walks = [];
+    var day = new Date();
+    for (var w = 0; w < DEMO_SPEC.length; w++) {
+      var spec = DEMO_SPEC[w];
+      day.setDate(day.getDate() - (w === 0 ? 1 : 2));
+      var when = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(),
+                                   day.getUTCDate(), spec.hour, spec.min, 0));
+      var target = spec.km * 1000;
+      var at = start, gone = 0, from = null;
+      var used = {};
+      var pts = [];
+      var carry = 0;
+      var guard = 0, steps = 0, retreads = 0;
+      while (gone < target && guard++ < 4000) {
+        var edges = g.adj[at];
+        if (!edges || !edges.length) break;
+        // Anything but straight back the way he came, and a road not yet walked
+        // in preference to one already done — which is what stops a demo walk
+        // pacing up and down the same forty metres.
+        var pick = null, fresh = [], back = null;
+        for (var e = 0; e < edges.length; e++) {
+          var to = edges[e][0];
+          if (to === from && edges.length > 1) { back = edges[e]; continue; }
+          if (!used[at + ">" + to]) fresh.push(edges[e]);
+          else if (!back) back = edges[e];
+        }
+        // Fresh road if there is any. Otherwise double back — a real walk does,
+        // and in a small town there is no other way to make up the distance —
+        // but sparingly. Left to retread whenever it liked the walk crossed
+        // itself a dozen times, which is a poor demo and confuses the race:
+        // inside the route's own look-ahead window your position matches
+        // several places at once and progress runs away to the end.
+        if (fresh.length) {
+          pick = fresh[(rnd() * fresh.length) | 0];
+        } else if (back && retreads < 4 + steps / 6) {
+          pick = back;
+          retreads++;
+        } else {
+          break;
+        }
+        steps++;
+        used[at + ">" + pick[0]] = 1;
+        used[pick[0] + ">" + at] = 1;
+
+        var segM = pick[2];
+        // Drop a fix every couple of minutes along the segment, not at the
+        // corners: a collar has no idea where the junctions are.
+        var every = DEMO_PACE * DEMO_FIX_S;
+        var walked = carry;
+        while (walked + every <= segM) {
+          walked += every;
+          var f = walked / segM;
+          var a = g.nodes[at], b = g.nodes[pick[0]];
+          pts.push({
+            lat: a.lat + (b.lat - a.lat) * f + (rnd() - 0.5) * DEMO_JITTER * 2,
+            lng: a.lng + (b.lng - a.lng) * f + (rnd() - 0.5) * DEMO_JITTER * 2,
+            t: new Date(when.getTime() +
+                        ((gone + walked) / DEMO_PACE) * 1000).toISOString()
+                        .replace(/\.\d+Z$/, "Z")
+          });
+        }
+        carry = walked - segM;
+        gone += segM;
+        from = at; at = pick[0];
+      }
+      if (pts.length > 2) walks.push(pts);
+    }
+    return walks;
+  }
 
   // ============================================================
   //  World building — turns OSM geometry into a tile grid
@@ -1668,7 +1683,9 @@
       return 0;
     }
 
-    return { nodes: nodes, nearest: nearest, route: route,
+    // `adj` is out for the demo-walk generator, which wanders the graph rather
+    // than routing across it and so needs the edges themselves.
+    return { nodes: nodes, adj: adj, nearest: nearest, route: route,
              edgeHalf: edgeHalf, size: nodes.length };
   }
 
@@ -7163,6 +7180,66 @@
 
   // Take me there: geocode, build a world of the standard size around it, and
   // hand it over. No walk data involved at any point.
+  // ---------- first run ----------
+  function openWelcome() {
+    document.getElementById("welcome").classList.add("open");
+    document.getElementById("welcome-name").value = state.dogName === "Your Dog"
+      ? "" : (state.dogName || "");
+    setTimeout(function () { document.getElementById("welcome-name").focus(); }, 60);
+  }
+
+  // Their name, their postcode, their town — and then six made-up walks in it,
+  // so the first thing they see is a working game rather than an empty map with
+  // a tutorial pinned to it.
+  function welcomeGo() {
+    var msg = document.getElementById("welcome-msg");
+    var btn = document.getElementById("btn-welcome-go");
+    var q = document.getElementById("welcome-place").value.trim();
+    var name = document.getElementById("welcome-name").value.trim();
+    if (!q) { msg.className = ""; msg.textContent = "Where do you walk?"; return; }
+    if (name) applyDogName(name);
+    btn.disabled = true;
+    msg.className = "busy";
+    msg.textContent = "Looking that up…";
+    geocode(q).then(function (hit) {
+      if (!hit || !isFinite(hit.lat) || !isFinite(hit.lng)) {
+        msg.className = "";
+        msg.textContent = "Could not find that one. A UK postcode works best.";
+        btn.disabled = false;
+        return;
+      }
+      msg.textContent = "Building " + hit.label + "…";
+      usefulPlace(hit.lat, hit.lng, hit.label);
+      routeCache = {}; walkGraph = null; walkGraphKey = null;
+      showLoader("Building " + hit.label);
+      return rebuildFromData().then(function () {
+        return makeDemo(false);
+      }).then(function () {
+        hideLoader();
+        document.getElementById("welcome").classList.remove("open");
+        btn.disabled = false;
+        msg.textContent = "";
+        toast(hit.label + " — press Roam to take " +
+              (state.dogName && state.dogName !== "Your Dog" ? state.dogName : "him") + " out");
+      });
+    }).catch(function (e) {
+      hideLoader();
+      msg.className = "";
+      msg.textContent = "That lookup failed. Try again in a moment.";
+      if (window.console) console.error("welcome", e);
+      btn.disabled = false;
+    });
+  }
+
+  document.getElementById("btn-welcome-go").addEventListener("click", welcomeGo);
+  document.getElementById("welcome-place").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); welcomeGo(); }
+  });
+  document.getElementById("welcome-name").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault();
+      document.getElementById("welcome-place").focus(); }
+  });
+
   function goToPlace() {
     var input = document.getElementById("place-input");
     var msg = document.getElementById("place-msg");
@@ -7370,7 +7447,7 @@
   });
   document.getElementById("btn-demo").addEventListener("click", function () {
     document.getElementById("data-panel").classList.remove("open");
-    loadSampleWalks(true);
+    makeDemo(true);
   });
   document.getElementById("btn-play").addEventListener("click", function () {
     if (!pb.walk) return;
@@ -7398,16 +7475,42 @@
   //  Start
   // ============================================================
 
-  function loadSampleWalks(force) {
-    stopWalk();
+  // Six made-up walks on the streets of the world already on screen. It has to
+  // run after the map is in, because the streets are the whole input — there is
+  // nothing to generate a walk along until Overpass has answered.
+  function makeDemo(force) {
     if (force) clearLocal();
+    var b = state.bounds;
+    if (!b || !state.osmWays || !state.osmWays.length) {
+      toast("No map here to make a walk on");
+      return Promise.resolve(false);
+    }
+    var centre = { lat: (b.minLat + b.maxLat) / 2, lng: (b.minLng + b.maxLng) / 2 };
+    var walks = makeDemoWalks(state.osmWays, centre);
+    if (!walks.length) {
+      toast("Not enough streets here for a demo walk");
+      return Promise.resolve(false);
+    }
     var flat = [];
-    SAMPLE_WALKS.forEach(function (w) { flat = flat.concat(w); });
-    buildFromPoints(flat, SAMPLE_WALKS);
-    routeCache = {};
-    walkGraph = null; walkGraphKey = null;
-    rebuildFromData();
-    if (force) toast("Sample walks restored");
+    walks.forEach(function (w) { flat = flat.concat(w); });
+    var ways = state.osmWays, label = state.placeLabel;
+    stopWalk();
+    buildFromPoints(flat, walks);
+    // Keep the world that is already built and already downloaded. The walks
+    // were generated inside it, so refetching a box a few metres different
+    // would be a second download of the same streets.
+    state.bounds = b;
+    state.osmWays = ways;
+    state.placeLabel = label;
+    state.isDemo = true;
+    osmCache[boundsKey(b)] = ways;
+    routeCache = {}; walkGraph = null; walkGraphKey = null;
+    saveLocal();
+    return queueBuild(10, 100).then(function () {
+      refreshRoute();
+      toast("Six demo walks, made up on your streets");
+      return true;
+    });
   }
 
   // Read before the scene boots: WorldScene.create makes the animations for
@@ -7447,8 +7550,14 @@
     rebuildFromData();
     toast("Restored your saved walks");
   } else {
+    // Nobody has been here before. There is nothing to show them — and there
+    // deliberately is not: what used to be here was one real dog's real walks,
+    // which is a fine thing for its owner to open and the wrong thing to hand
+    // a stranger. So ask where *they* walk.
     applyDogName("");
-    loadSampleWalks(false);
+    hideBoot();
+    firstMapIn = true;
+    openWelcome();
   }
 })();
 </script>
