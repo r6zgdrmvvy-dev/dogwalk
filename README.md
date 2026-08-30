@@ -571,13 +571,50 @@ been run against a live account and produced a usable month of history; if a
 run comes back empty, re-run with `--raw` and check `<output>.raw.json` to see
 what the API actually returned.
 
+## Accounts, and installing it
+
+The game works with no account and no server at all: open it, say where you
+walk, and everything lives in that browser. That is the default and it is not
+going away.
+
+An account adds one thing — the same dog and the same walks on your phone as
+well as your laptop. `server/app.py` provides it, and also serves the game, so
+it is one process:
+
+```bash
+python3 server/app.py            # http://127.0.0.1:8080
+python3 tests/server_test.py     # 42 checks
+```
+
+Passwords are scrypt-hashed with a per-user salt and never stored or logged;
+sessions are `HttpOnly; SameSite=Lax` cookies whose tokens are stored only as
+hashes; login is rate-limited per account and per address; and a post from
+another site is refused outright. `server/README.md` has the whole of it,
+including what to do before pointing a domain at this and where the payment
+provider goes.
+
+The free plan is the entire game, because the entire game runs in your browser
+and costs nothing to run. The paid plan buys the part that does cost something:
+keeping your walks on a server. Checkout currently answers `501` and says it is
+not switched on, which is the honest state of it.
+
+It installs, too. There is a web app manifest and a service worker, so it goes
+on a home screen and opens with no network — the shell is cached, and a town
+you have already built is in `localStorage`, so offline gets your own streets
+rather than an error page. Map and weather requests are deliberately never
+cached, and neither is anything under `/api/`: a cached answer to "who am I" is
+somebody else's account after a sign-out.
+
 ## Status / open items
 
-- No backend. Your walks are kept in this browser's `localStorage` only —
+- Sign-in has no email verification and no password reset, so a forgotten
+  password is currently an unrecoverable account. That is the first thing to
+  add before this has real users.
+- Signed out, your walks are kept in this browser's `localStorage` only —
   nothing is uploaded, and nothing follows you to another device.
-- The bundled samples are real GPS trails. A walk trail is home-address
-  adjacent data; swap them out before publishing your own copy if that matters
-  to you.
+- The demo walks are generated, not real. There used to be six real trails from
+  a real collar bundled into the page, which was fine while this was one
+  person's toy and wrong the moment anybody else could open it.
 - The Tractive export script's response parsing is best-effort. It works on a
   real account, but the endpoint is undocumented and could change shape.
 - The world is built around one walk at a time. A single day trip whose route

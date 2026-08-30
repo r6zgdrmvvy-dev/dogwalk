@@ -6,3 +6,6 @@ walks.json
 node_modules/
 package-lock.json
 package.json
+server/*.sqlite3
+server/*.sqlite3-wal
+server/*.sqlite3-shm

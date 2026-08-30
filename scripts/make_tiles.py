@@ -1200,6 +1200,12 @@ def build():
     dindex["cols"] = DCOLS
     index["dogs"] = dindex
 
+    # App icons. Drawn from the same sprite the game runs on rather than from
+    # some separate artwork, so the thing on your home screen is the dog you
+    # actually walk. Nearest-neighbour all the way up: a smoothed pixel sprite
+    # is a smudge, and at 512px the smudge is the whole icon.
+    icons(here, dogs, dindex)
+
     index["_count"] = len(tiles)
     index["_cols"] = COLS
     index["_size"] = T
@@ -1211,6 +1217,34 @@ def build():
           % (len(tiles), COLS * T, rows * T, len(props), COLS * PT, prows * PT,
              len(people), len(dogs)))
     print(json.dumps(index, sort_keys=True))
+
+
+def icons(here, dogs, dindex):
+    """Home-screen icons: the dog, trotting, on the game's own grass."""
+    # A golden labrador, mid-stride: type 0, coat 1, frame 1. Golden rather
+    # than the black one the game opens with, because at forty-eight pixels on
+    # a dark home screen a black dog on grass is a dark shape on a dark shape.
+    dog = dogs[(0 * len(DOG_COATS) + 1) * 4 + 1]
+    for size in (192, 512):
+        im = Image.new("RGBA", (size, size), (52, 80, 52, 255))
+        d = ImageDraw.Draw(im)
+        r = size // 2
+        d.ellipse([size * 0.06, size * 0.06, size * 0.94, size * 0.94],
+                  fill=(78, 114, 72, 255))
+        d.ellipse([size * 0.10, size * 0.10, size * 0.90, size * 0.90],
+                  fill=(92, 128, 80, 255))
+        big = dog.resize((int(size * 0.86), int(size * 0.86)), Image.NEAREST)
+        im.alpha_composite(big, (int(size * 0.07), int(size * 0.07)))
+        im.save(os.path.join(here, "assets", "icon-%d.png" % size))
+
+    # Maskable: the same thing with everything important inside the safe circle,
+    # since Android will crop this to whatever shape it feels like.
+    size = 512
+    im = Image.new("RGBA", (size, size), (92, 128, 80, 255))
+    inset = int(size * 0.22)
+    big = dog.resize((size - inset * 2, size - inset * 2), Image.NEAREST)
+    im.alpha_composite(big, (inset, inset))
+    im.save(os.path.join(here, "assets", "icon-maskable.png"))
 
 
 if __name__ == "__main__":

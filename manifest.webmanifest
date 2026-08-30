@@ -1,0 +1,17 @@
+{
+  "name": "A Walk With Your Dog",
+  "short_name": "Dog Walk",
+  "description": "Your own streets as a little pixel town, and a dog to walk round them.",
+  "start_url": "./game.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#3b3f33",
+  "theme_color": "#1c1713",
+  "categories": ["games", "lifestyle"],
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

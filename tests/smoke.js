@@ -67,6 +67,43 @@ function stubBridge(points) {
   return new Promise((r) => server.listen(8765, "127.0.0.1", () => r(server)));
 }
 
+// The real account server, on a throwaway database, so the account checks
+// exercise the thing that will actually be deployed rather than a mock of it.
+function startAccountServer() {
+  const { spawn } = require("child_process");
+  const os = require("os");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dogwalk-smoke-"));
+  // A port picked per run. A fixed one meant a crashed run left a server
+  // holding both the port and its database, so the next run's signup hit an
+  // account that already existed and quietly did nothing — which looked like a
+  // bug in the signup rather than in the test.
+  const port = 8800 + Math.floor(Math.random() * 400);
+  const proc = spawn("python3", [
+    path.join(ROOT, "server", "app.py"),
+    "--port", String(port), "--quiet",
+    "--db", path.join(dir, "test.sqlite3"),
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  let out = "";
+  proc.stdout.on("data", (d) => { out += d; });
+  proc.stderr.on("data", (d) => { out += d; });
+  const base = "http://127.0.0.1:" + port + "/game.html";
+  const stop = () => { try { proc.kill(); } catch (e) { /* already gone */ }
+                       fs.rmSync(dir, { recursive: true, force: true }); };
+  return new Promise((resolve) => {
+    const tryIt = (n) => {
+      http.get({ host: "127.0.0.1", port, path: "/api/health", timeout: 1000 }, (r) => {
+        r.resume();
+        resolve(r.statusCode === 200 ? { base, port, stop } : null);
+      }).on("error", () => {
+        if (n <= 0) { console.log("  server did not start:", out.slice(0, 300));
+                      stop(); resolve(null); return; }
+        setTimeout(() => tryIt(n - 1), 300);
+      });
+    };
+    setTimeout(() => tryIt(30), 400);
+  });
+}
+
 async function stub(page) {
   for (const host of ["overpass-api.de", "overpass.kumi.systems", "overpass.openstreetmap.ru"]) {
     await page.route("https://" + host + "/api/interpreter", (r) =>
@@ -1670,8 +1707,138 @@ async function waitForReady(page) {
       bridge.close();
     }
 
+    // ---------- installable ----------
+    const app = await page.evaluate(async () => {
+      const link = document.querySelector('link[rel="manifest"]');
+      const res = await fetch(link.href);
+      const man = await res.json();
+      const swRes = await fetch("sw.js");
+      return {
+        manifest: man,
+        icons: man.icons.map((i) => i.sizes + ":" + i.purpose),
+        theme: (document.querySelector('meta[name="theme-color"]') || {}).content,
+        apple: !!document.querySelector('link[rel="apple-touch-icon"]'),
+        swOk: swRes.ok,
+        swBody: (await swRes.text()).slice(0, 4000),
+      };
+    });
+    check("there is a web app manifest, and it parses",
+          !!app.manifest.name && app.manifest.display === "standalone",
+          app.manifest.name + " / " + app.manifest.display);
+    check("with an icon at both sizes and a maskable one",
+          app.icons.join(" ").includes("192x192") &&
+          app.icons.join(" ").includes("512x512") &&
+          app.icons.join(" ").includes("maskable"), app.icons.join(" "));
+    check("a theme colour and an apple touch icon", !!app.theme && app.apple, app.theme);
+    check("the install button hides until the browser offers one", await page.evaluate(
+      () => document.getElementById("btn-install").hidden));
+    check("the service worker is served and never caches the account API",
+          app.swOk && /\/api\//.test(app.swBody) && /return;/.test(app.swBody));
+
     check("no page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
     await page.close();
+
+    // ---------- accounts ----------
+    // Against the real server, on its own throwaway database. Signed out the
+    // game is exactly what it was before any of this existed, so that is
+    // checked first, from the static host where there is no server at all.
+    console.log("accounts");
+    const acctPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const acctErrors = [];
+    acctPage.on("pageerror", (e) => acctErrors.push(String(e.message)));
+    await stub(acctPage);
+    await acctPage.goto(base);
+    await acctPage.waitForFunction(
+      () => window.dogwalk && window.dogwalk.account &&
+            window.dogwalk.account().available !== null,
+      null, { timeout: 30000 });
+    check("with no server behind it, the game says so instead of failing",
+          await acctPage.evaluate(() => window.dogwalk.account().available === false));
+    // Opened directly: the welcome overlay is up on a first run and would eat
+    // the click on the button behind it.
+    await acctPage.evaluate(() => {
+      document.getElementById("btn-account").click();
+    });
+    await acctPage.waitForTimeout(400);
+    check("and the sign-in form is not offered where it cannot work",
+          await acctPage.evaluate(() =>
+            document.getElementById("account-out").hidden &&
+            /static hosting/.test(document.getElementById("account-blurb").textContent)));
+    check("no page errors", acctErrors.length === 0, acctErrors.slice(0, 2).join(" | "));
+    await acctPage.close();
+
+    const srv = await startAccountServer();
+    try {
+    if (srv) {
+      const app1 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      const app1Errors = [];
+      app1.on("pageerror", (e) => app1Errors.push(String(e.message)));
+      await stub(app1);
+      await app1.goto(srv.base);
+      await firstRun(app1, "Rusty");
+      const walksHere = await app1.evaluate(() => window.dogwalk.state.points.length);
+
+      await app1.evaluate(() => document.getElementById("account-panel").classList.add("open"));
+      await app1.fill("#account-email", "ann@example.com");
+      await app1.fill("#account-pw", "a short phrase will do");
+      await app1.click("#btn-signup");
+      await app1.waitForFunction(() => window.dogwalk.account().signedIn,
+                                 null, { timeout: 30000 });
+      check("you can make an account from inside the game", true);
+      await app1.click("#btn-push");
+      await app1.waitForFunction(
+        () => /Saved|Already saved/.test(document.getElementById("account-msg").textContent),
+        null, { timeout: 30000 });
+      check("and put your walks in it", await app1.evaluate(() =>
+        document.getElementById("account-msg").textContent));
+
+      // A second browser, signing in to the same account, must get the same
+      // dog and the same walks. That is the whole promise of the feature.
+      const app2 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      const app2Errors = [];
+      app2.on("pageerror", (e) => app2Errors.push(String(e.message)));
+      await stub(app2);
+      await app2.goto(srv.base);
+      await app2.waitForSelector("#welcome.open", { timeout: 45000 });
+      check("a different browser starts with nothing", await app2.evaluate(() =>
+        window.dogwalk.state.points.length === 0));
+      await app2.evaluate(() => {
+        document.getElementById("welcome").classList.remove("open");
+        document.getElementById("account-panel").classList.add("open");
+      });
+      await app2.fill("#account-email", "ann@example.com");
+      await app2.fill("#account-pw", "a short phrase will do");
+      await app2.click("#btn-signin");
+      await app2.waitForFunction(
+        () => window.dogwalk.state.points.length > 0, null, { timeout: 60000 });
+      const carried = await app2.evaluate(() => ({
+        points: window.dogwalk.state.points.length,
+        name: window.dogwalk.state.dogName,
+      }));
+      check("signing in on another device brings your dog and your walks with you",
+            carried.points === walksHere && carried.name === "Rusty",
+            JSON.stringify(carried) + " vs " + walksHere + " points here");
+
+      // Signing out must leave the browser exactly as it was, not wipe it.
+      await app2.evaluate(() => document.getElementById("account-panel").classList.add("open"));
+      await app2.waitForTimeout(200);
+      await app2.click("#btn-signout");
+      await app2.waitForFunction(() => !window.dogwalk.account().signedIn,
+                                 null, { timeout: 20000 });
+      check("signing out leaves your walks in the browser rather than taking them",
+            await app2.evaluate(() => window.dogwalk.state.points.length > 0));
+
+      check("no page errors while signed in",
+            app1Errors.length === 0 && app2Errors.length === 0,
+            app1Errors.concat(app2Errors).slice(0, 2).join(" | "));
+      await app1.close();
+      await app2.close();
+    } else {
+      console.log("  (account server would not start; skipping)");
+    }
+    } finally {
+      if (srv) srv.stop();
+    }
 
     console.log("no map data available");
     const off = await browser.newPage({ viewport: { width: 1024, height: 720 } });

@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>A Walk With Your Dog</title>
+<meta name="description" content="Your own streets as a little pixel town, and a dog to walk round them.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1c1713">
+<link rel="icon" href="assets/icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Dog Walk">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&display=swap" rel="stylesheet">
@@ -462,6 +470,34 @@
   #welcome-msg { font-size: 12px; margin-top: 9px; min-height: 16px; color: #e88; }
   #welcome-msg.busy { color: var(--accent); }
 
+  /* Accounts. Same furniture as the welcome card, because it is the same
+     kind of moment: a form standing between you and the game. */
+  #account-panel {
+    position: fixed; z-index: 41; inset: 0; display: none;
+    background: rgba(8,6,4,0.82); align-items: center; justify-content: center; padding: 20px;
+  }
+  #account-panel.open { display: flex; }
+  #account-panel .card {
+    background: #1c1713; border: 2px solid var(--panel-edge); border-radius: 14px;
+    padding: 18px; width: min(420px, 100%);
+  }
+  #account-panel h2 { margin: 0 0 6px; font-size: 20px; }
+  #account-panel p { margin: 0 0 14px; font-size: 13px; opacity: 0.78; line-height: 1.5; }
+  #account-panel p.fine { margin: 14px 0 0; font-size: 11px; opacity: 0.5; }
+  #account-panel p.who { opacity: 1; font-size: 13px; }
+  #account-panel p.who b { color: var(--accent); }
+  #account-panel .field { display: block; font-size: 12px; opacity: 0.75; margin-bottom: 11px; }
+  #account-panel .field input {
+    display: block; width: 100%; margin-top: 5px; background: #12100e; color: var(--ink);
+    border: 2px solid var(--panel-edge); border-radius: 8px; padding: 9px 10px;
+    font: inherit; font-size: 14px; box-sizing: border-box;
+  }
+  #account-panel .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  #account-msg { font-size: 12px; margin-top: 10px; min-height: 16px; color: #e88; }
+  #account-msg.ok { color: var(--good); }
+  #account-msg.busy { color: var(--accent); }
+  #btn-account.on { border-color: var(--good); color: var(--good); }
+
   #data-panel {
     position: fixed; z-index: 40; inset: 0; display: none;
     background: rgba(8,6,4,0.72); align-items: center; justify-content: center; padding: 20px;
@@ -558,6 +594,8 @@
     <button class="btn" id="btn-roam">Roam</button>
     <button class="btn" id="btn-stats">Stats</button>
     <button class="btn" id="btn-data">Map</button>
+    <button class="btn" id="btn-account">Sign in</button>
+    <button class="btn" id="btn-install" hidden title="Add it to your home screen">Install</button>
     <div id="zoom">
       <button class="btn" id="btn-zoom-in" aria-label="Zoom in">+</button>
       <button class="btn" id="btn-zoom-out" aria-label="Zoom out">&minus;</button>
@@ -699,6 +737,49 @@
     <div id="welcome-msg"></div>
     <p class="fine">Nothing is uploaded. Everything stays in this browser until
       you make an account.</p>
+  </div>
+</div>
+
+<div id="account-panel">
+  <div class="card">
+    <h2 id="account-head">Your account</h2>
+    <p id="account-blurb">Make an account and your dog, your walks and how he
+      behaves follow you to your phone. Without one, everything still works —
+      it just stays in this browser.</p>
+
+    <div id="account-out">
+      <label class="field">Email
+        <input type="email" id="account-email" autocomplete="username" maxlength="200">
+      </label>
+      <label class="field">Password
+        <input type="password" id="account-pw" autocomplete="current-password" maxlength="200">
+      </label>
+      <div class="row">
+        <button class="btn primary" id="btn-signin">Sign in</button>
+        <button class="btn" id="btn-signup">Create account</button>
+      </div>
+    </div>
+
+    <div id="account-in" hidden>
+      <p class="who">Signed in as <b id="account-who"></b><br>
+        <span id="account-plan"></span></p>
+      <div class="row">
+        <button class="btn" id="btn-pull">Load from my account</button>
+        <button class="btn" id="btn-push">Save to my account</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="btn-subscribe">Subscribe</button>
+        <button class="btn" id="btn-signout">Sign out</button>
+      </div>
+    </div>
+
+    <div id="account-msg"></div>
+    <div class="row">
+      <button class="btn" id="btn-close-account" style="margin-left:auto">Close</button>
+    </div>
+    <p class="fine">Your password is hashed with scrypt before it is stored and
+      is never written to a log. Your Tractive password is never sent here at
+      all — that stays on your own machine.</p>
   </div>
 </div>
 
@@ -5972,9 +6053,13 @@
       scene.setFreeCam(false);
       scene.setTimeOfDay(state.points.length ? state.points[0].t : null);
       scene.cameras.main.stopFollow();
-      scene.liveGfx.clear();
-      scene.dogGfx.clear();
-      scene.dog.play(scene.dogAnim("sit"));
+      // These are made when a level is built, and a level need not have been
+      // built yet: a browser that has never been past the welcome box can now
+      // sign in and have a walk handed to it, and this used to throw on the
+      // way in and swallow the whole sign-in.
+      if (scene.liveGfx) scene.liveGfx.clear();
+      if (scene.dogGfx) scene.dogGfx.clear();
+      if (scene.dog) scene.dog.play(scene.dogAnim("sit"));
     }
     renderWalkList();
   }
@@ -6498,6 +6583,7 @@
       routeCache = {};
       walkGraph = null; walkGraphKey = null;
       var kept = saveLocal();
+      nudgeSave();
       setDataMsg("Loaded " + data.length + " points across " + state.walks.length + " walk(s)." +
                  (kept ? " Saved for next time." : " Too big to save locally."), true);
       rebuildFromData();
@@ -6994,6 +7080,7 @@
     roam.quests = []; renderQuests();
     roam.race = null; renderRace();
     saveRoamed();
+    nudgeSave();
     scene.endRoam();
     document.getElementById("roam-bar").classList.add("off");
     document.getElementById("btn-roam").classList.remove("on");
@@ -7180,6 +7267,261 @@
 
   // Take me there: geocode, build a world of the standard size around it, and
   // hand it over. No walk data involved at any point.
+  // ---------- accounts ----------
+  // Optional, all of it. Signed out the game is exactly what it was before
+  // any of this existed: everything in localStorage, nothing leaving the
+  // browser, no server needed — which is also what happens when the game is
+  // served from somewhere static like Pages and there is no server to talk to.
+  // Signing in adds one thing: the same dog and the same walks on your phone.
+  var account = { signedIn: false, email: null, plan: "free", limit: 0,
+                  available: null, pushTimer: null, lastPushed: null };
+
+  function setAccountMsg(msg, cls) {
+    var el = document.getElementById("account-msg");
+    el.textContent = msg || "";
+    el.className = cls || "";
+  }
+
+  // Everything worth carrying between devices, in one lump. Deliberately the
+  // same shape as the local save plus the things that used to live in their
+  // own keys — a save is "your dog and where you have walked him", and it
+  // being one object is what makes it one PUT.
+  function collectSave() {
+    return {
+      v: 1,
+      name: state.dogName,
+      points: state.points,
+      dog: { type: state.dogType, coat: state.dogCoat,
+             collar: state.dogCollar, bond: state.bond },
+      roamed: state.roamed,
+      isDemo: !!state.isDemo
+    };
+  }
+
+  function applySave(save) {
+    if (!save || !Array.isArray(save.points)) return false;
+    if (save.dog) {
+      if (DOG_TYPES.indexOf(save.dog.type) >= 0) state.dogType = save.dog.type;
+      if (DOG_COATS.indexOf(save.dog.coat) >= 0) state.dogCoat = save.dog.coat;
+      if (COLLARS.some(function (c) { return c.key === save.dog.collar; })) {
+        state.dogCollar = save.dog.collar;
+      }
+      if (isFinite(save.dog.bond)) state.bond = Math.max(0, Math.min(100, save.dog.bond));
+      saveDogLook();
+      if (scene) scene.setDogLook(state.dogType, state.dogCoat);
+    }
+    if (Array.isArray(save.roamed) && save.roamed.length) {
+      state.roamed = save.roamed;
+      saveRoamed();
+    }
+    applyDogName(save.name || "");
+    state.isDemo = !!save.isDemo;
+    if (save.points.length >= 3) {
+      stopWalk();
+      buildFromPoints(save.points);
+      routeCache = {}; walkGraph = null; walkGraphKey = null;
+      saveLocal();
+      return true;
+    }
+    return false;
+  }
+
+  function api(path, body) {
+    var opts = { credentials: "same-origin", cache: "no-store" };
+    if (body !== undefined) {
+      opts.method = "POST";
+      opts.headers = { "Content-Type": "application/json" };
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(path, opts).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (!r.ok) {
+          var e = new Error(j && j.error ? j.error : "That did not work.");
+          e.status = r.status; e.body = j;
+          throw e;
+        }
+        return j;
+      });
+    });
+  }
+
+  function renderAccount() {
+    var inBox = document.getElementById("account-in");
+    var outBox = document.getElementById("account-out");
+    var btn = document.getElementById("btn-account");
+    inBox.hidden = !account.signedIn;
+    outBox.hidden = !!account.signedIn;
+    btn.classList.toggle("on", !!account.signedIn);
+    btn.textContent = account.signedIn ? "Account" : "Sign in";
+    if (account.signedIn) {
+      document.getElementById("account-who").textContent = account.email;
+      document.getElementById("account-plan").textContent =
+        account.plan === "pro"
+          ? "Subscribed — your walks are kept for you."
+          : "Free plan — up to " + Math.round((account.limit || 0) / 1024) +
+            "KB kept for you.";
+      document.getElementById("btn-subscribe").textContent =
+        account.plan === "pro" ? "Manage subscription" : "Subscribe";
+    }
+    if (account.available === false) {
+      document.getElementById("account-blurb").textContent =
+        "This copy of the game is served from static hosting, so there is no " +
+        "account server to sign in to. Everything works — it just stays in " +
+        "this browser. Run server/app.py to have accounts.";
+      outBox.hidden = true;
+    }
+  }
+
+  // Is there a server behind this page at all? Served from Pages there is not,
+  // and the sign-in form should say so rather than failing when pressed.
+  function probeAccount() {
+    return api("/api/me").then(function (me) {
+      account.available = true;
+      account.signedIn = !!me.signedIn;
+      account.email = me.email || null;
+      account.plan = me.plan || "free";
+      account.limit = me.saveLimit || 0;
+      renderAccount();
+      return me;
+    }).catch(function () {
+      account.available = false;
+      account.signedIn = false;
+      renderAccount();
+      return null;
+    });
+  }
+
+  function afterAuth(res) {
+    account.signedIn = !!res.signedIn;
+    account.email = res.email || null;
+    account.plan = res.plan || "free";
+    account.limit = res.saveLimit || 0;
+    renderAccount();
+  }
+
+  function signIn(creating) {
+    var email = document.getElementById("account-email").value.trim();
+    var pw = document.getElementById("account-pw").value;
+    if (!email || !pw) { setAccountMsg("Fill both in first."); return; }
+    setAccountMsg(creating ? "Creating your account…" : "Signing in…", "busy");
+    api(creating ? "/api/signup" : "/api/login", { email: email, password: pw })
+      .then(function (res) {
+        document.getElementById("account-pw").value = "";
+        if (creating && !res.signedIn && res.check) {
+          // The server will not say whether an address is already registered —
+          // that is a list of who has an account here. So neither can this.
+          setAccountMsg("If that address is free, the account is made. " +
+                        "Otherwise, sign in instead.", "");
+          return;
+        }
+        afterAuth(res);
+        setAccountMsg("Signed in.", "ok");
+        // Whatever is on the server wins if this browser has nothing worth
+        // keeping; otherwise you are asked rather than quietly overwritten.
+        return pullSave({ quiet: true });
+      })
+      .catch(function (e) { setAccountMsg(e.message); });
+  }
+
+  function pullSave(o) {
+    return api("/api/save").then(function (res) {
+      if (!res.save) {
+        if (!(o && o.quiet)) setAccountMsg("Nothing saved to your account yet.", "");
+        // First sign-in on a browser that has walks: put them up.
+        if (state.points.length >= 3) return pushSave({ quiet: true });
+        return null;
+      }
+      var mine = state.points.length;
+      var theirs = (res.save.points || []).length;
+      if (o && o.quiet && mine >= 3 && !state.isDemo && theirs <= mine) {
+        // This browser has real walks at least as complete as the account's.
+        // Do not throw them away on the way in.
+        setAccountMsg("Signed in. This browser's walks are newer — " +
+                      "press Save to your account to upload them.", "ok");
+        return null;
+      }
+      if (applySave(res.save)) {
+        rebuildFromData();
+        setAccountMsg("Loaded " + theirs + " points from your account.", "ok");
+      }
+      return res;
+    }).catch(function (e) { setAccountMsg(e.message); });
+  }
+
+  function pushSave(o) {
+    var save = collectSave();
+    var body = JSON.stringify(save);
+    if (body === account.lastPushed) {
+      // Nothing has changed since the last upload. Skip the request, but say
+      // so — a Save button that answers with silence reads as broken.
+      if (!(o && o.quiet)) setAccountMsg("Already saved — nothing has changed.", "ok");
+      return Promise.resolve(null);
+    }
+    if (!(o && o.quiet)) setAccountMsg("Saving…", "busy");
+    return api("/api/save", { save: save }).then(function (res) {
+      account.lastPushed = body;
+      account.plan = res.plan || account.plan;
+      account.limit = res.limit || account.limit;
+      renderAccount();
+      if (!(o && o.quiet)) {
+        setAccountMsg("Saved " + Math.round(res.size / 1024) + "KB to your account.", "ok");
+      }
+      return res;
+    }).catch(function (e) {
+      if (e.status === 413) {
+        setAccountMsg("That is more than the free plan keeps (" +
+                      Math.round((e.body.limit || 0) / 1024) + "KB). " +
+                      "Subscribe, or load fewer days.");
+      } else if (!(o && o.quiet)) {
+        setAccountMsg(e.message);
+      }
+      return null;
+    });
+  }
+
+  // Pushed a few seconds after things settle rather than on every change: a
+  // roam writes state constantly and a PUT per step would be absurd.
+  function nudgeSave() {
+    if (!account.signedIn) return;
+    if (account.pushTimer) clearTimeout(account.pushTimer);
+    account.pushTimer = setTimeout(function () {
+      account.pushTimer = null;
+      pushSave({ quiet: true });
+    }, 4000);
+  }
+
+  document.getElementById("btn-account").addEventListener("click", function () {
+    setAccountMsg("");
+    document.getElementById("account-panel").classList.add("open");
+    if (account.available === null) probeAccount();
+  });
+  document.getElementById("btn-close-account").addEventListener("click", function () {
+    document.getElementById("account-panel").classList.remove("open");
+  });
+  document.getElementById("btn-signin").addEventListener("click", function () { signIn(false); });
+  document.getElementById("btn-signup").addEventListener("click", function () { signIn(true); });
+  document.getElementById("account-pw").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); signIn(false); }
+  });
+  document.getElementById("btn-pull").addEventListener("click", function () { pullSave(); });
+  document.getElementById("btn-push").addEventListener("click", function () { pushSave(); });
+  document.getElementById("btn-signout").addEventListener("click", function () {
+    api("/api/logout", {}).then(function () {
+      account.signedIn = false; account.email = null; account.lastPushed = null;
+      renderAccount();
+      setAccountMsg("Signed out. Your walks are still in this browser.", "ok");
+    }).catch(function (e) { setAccountMsg(e.message); });
+  });
+  document.getElementById("btn-subscribe").addEventListener("click", function () {
+    setAccountMsg("Opening checkout…", "busy");
+    api("/api/billing/checkout", {}).then(function (res) {
+      if (res.url) { window.location.href = res.url; return; }
+      setAccountMsg("Subscriptions are not switched on yet.", "");
+    }).catch(function (e) {
+      setAccountMsg(e.body && e.body.why ? e.body.why : e.message);
+    });
+  });
+
   // ---------- first run ----------
   function openWelcome() {
     document.getElementById("welcome").classList.add("open");
@@ -7506,6 +7848,7 @@
     osmCache[boundsKey(b)] = ways;
     routeCache = {}; walkGraph = null; walkGraphKey = null;
     saveLocal();
+    nudgeSave();
     return queueBuild(10, 100).then(function () {
       refreshRoute();
       toast("Six demo walks, made up on your streets");
@@ -7533,10 +7876,54 @@
                      pace: { walk: WALK_MS, jog: JOG_MS },
                      grade: function () { return scene && scene.gradeFX; },
                      bond: bond, bondF: bondF, bondWord: bondWord,
-                     STEADY_BOND: STEADY_BOND, throwBall: throwBall };
+                     STEADY_BOND: STEADY_BOND, throwBall: throwBall,
+                     account: function () { return account; },
+                     collectSave: collectSave };
+
+  // Installable, and openable with no network: the shell is cached, and a town
+  // you have already built is in localStorage, so offline gets you your own
+  // streets rather than an error page. Registered late and quietly — a failed
+  // registration (file:// , no HTTPS, a browser without one) must cost nothing.
+  if ("serviceWorker" in navigator && location.protocol.indexOf("http") === 0) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("sw.js").catch(function (e) {
+        if (window.console) console.info("no offline support here:", e.message);
+      });
+    });
+  }
+
+  // Chrome hands you the install prompt once and expects you to keep it. The
+  // button only appears if there is one to fire.
+  var installPrompt = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    installPrompt = e;
+    var btn = document.getElementById("btn-install");
+    if (btn) btn.hidden = false;
+  });
+  window.addEventListener("appinstalled", function () {
+    installPrompt = null;
+    var btn = document.getElementById("btn-install");
+    if (btn) btn.hidden = true;
+  });
+  document.getElementById("btn-install").addEventListener("click", function () {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    installPrompt.userChoice.then(function () {
+      installPrompt = null;
+      document.getElementById("btn-install").hidden = true;
+    });
+  });
 
   loadRoamed();
   applyTrotFrames();
+  // Is there a server behind this page? Answered once, in the background, so
+  // the button says "Sign in" or explains itself rather than finding out the
+  // hard way when somebody presses it. Served from static hosting there is no
+  // server, and that is a supported way to run this.
+  probeAccount().then(function (me) {
+    if (me && me.signedIn) toast("Signed in as " + me.email);
+  });
 
   if (window.matchMedia("(max-width: 720px)").matches) {
     document.getElementById("walks").classList.add("hidden");
