@@ -67,6 +67,32 @@ PRO_SAVE_BYTES = 8 * 1024 * 1024
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+\.[^@\s]+$")
 
+# Everywhere the game legitimately talks to, and nowhere else. The bridge is on
+# loopback, the map comes from Overpass, the weather from Open-Meteo, and
+# postcodes from postcodes.io with Nominatim behind it.
+CSP = "; ".join([
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    # blob: because Phaser's loader fetches the spritesheets itself and hands
+    # the decoder an object URL. Without it the whole tileset silently fails to
+    # load and the game comes up as bare ground — which is exactly how this was
+    # found, and exactly the sort of thing a too-tight policy does quietly.
+    "img-src 'self' data: blob:",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "script-src 'self' 'unsafe-inline'",
+    "worker-src 'self'",
+    "connect-src 'self' "
+    "https://overpass-api.de https://overpass.kumi.systems "
+    "https://overpass.openstreetmap.ru "
+    "https://api.postcodes.io https://nominatim.openstreetmap.org "
+    "https://archive-api.open-meteo.com https://api.open-meteo.com "
+    "http://127.0.0.1:8765 http://localhost:8765",
+])
+
 STATIC = {
     "/": ("game.html", "text/html; charset=utf-8"),
     "/game.html": ("game.html", "text/html; charset=utf-8"),
@@ -169,13 +195,27 @@ class Store:
                       (token_hash(token), uid, now, now + SESSION_DAYS * 86400))
         return token
 
-    def session_user(self, token):
+    def session_user(self, token, renew=False):
         if not token:
             return None
+        th = token_hash(token)
+        now = int(time.time())
         row = self._conn().execute(
-            "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id"
-            " WHERE s.token_hash = ? AND s.expires_at > ?",
-            (token_hash(token), int(time.time()))).fetchone()
+            "SELECT u.*, s.expires_at AS s_expires FROM sessions s"
+            " JOIN users u ON u.id = s.user_id"
+            " WHERE s.token_hash = ? AND s.expires_at > ?", (th, now)).fetchone()
+        if row is None:
+            return None
+        # Sliding expiry. Without it a session dies forty-five days after it
+        # was made however much you have been using it, which is somebody being
+        # signed out mid-walk for no reason they can see. Only written when it
+        # has actually moved a day, so this is not a write per request.
+        if renew:
+            want = now + SESSION_DAYS * 86400
+            if want - row["s_expires"] > 86400:
+                with self._conn() as c:
+                    c.execute("UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
+                              (want, th))
         return row
 
     def drop_session(self, token):
@@ -199,12 +239,31 @@ class Store:
         return self._conn().execute(
             "SELECT body, updated_at FROM saves WHERE user_id = ?", (uid,)).fetchone()
 
-    def put_save(self, uid, body):
+    def put_save(self, uid, body, if_unchanged_since=None):
+        """Write, unless somebody else wrote first.
+
+        Two devices signed into one account will both push, and last-write-wins
+        means one of them quietly loses a walk. The client sends back the
+        updated_at it was last shown; if the stored one has moved on since, the
+        write is refused and the client is told to look at what is there.
+        """
+        now = int(time.time())
         with self._conn() as c:
+            if if_unchanged_since is not None:
+                cur = c.execute(
+                    "UPDATE saves SET body = ?, updated_at = ?"
+                    " WHERE user_id = ? AND updated_at <= ?",
+                    (body, now, uid, if_unchanged_since))
+                if cur.rowcount:
+                    return now
+                have = c.execute("SELECT updated_at FROM saves WHERE user_id = ?",
+                                 (uid,)).fetchone()
+                if have is not None:
+                    return None                       # somebody got there first
             c.execute("INSERT INTO saves (user_id, body, updated_at) VALUES (?,?,?)"
                       " ON CONFLICT(user_id) DO UPDATE SET body = excluded.body,"
-                      " updated_at = excluded.updated_at",
-                      (uid, body, int(time.time())))
+                      " updated_at = excluded.updated_at", (uid, body, now))
+        return now
 
     def delete_user(self, uid):
         with self._conn() as c:
@@ -311,9 +370,33 @@ def make_handler(store, opts):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "same-origin")
             self.send_header("X-Frame-Options", "DENY")
+            # The page is one file with its script and style inline, so
+            # script-src cannot be locked down without splitting it up — and
+            # that is not a reason to skip the rest. connect-src is the one
+            # that earns its keep here: it is the exact list of places this
+            # game is allowed to send anything, which means an injected script
+            # cannot post a walk history off to somewhere else.
+            self.send_header("Content-Security-Policy", CSP)
             if opts.https:
                 self.send_header("Strict-Transport-Security",
                                  "max-age=31536000; includeSubDomains")
+
+        def _who(self):
+            """The address to rate-limit against.
+
+            Straight off the socket unless we have been told how many proxies
+            are in front, in which case count in from the right end of
+            X-Forwarded-For: the rightmost entries are the ones our own
+            infrastructure appended and can be believed, everything left of
+            them is whatever the client felt like sending.
+            """
+            if opts.trust_proxy > 0:
+                fwd = self.headers.get("X-Forwarded-For")
+                if fwd:
+                    parts = [p.strip() for p in fwd.split(",") if p.strip()]
+                    if len(parts) >= opts.trust_proxy:
+                        return parts[-opts.trust_proxy]
+            return self.client_address[0]
 
         def _cookies(self):
             raw = self.headers.get("Cookie") or ""
@@ -324,18 +407,32 @@ def make_handler(store, opts):
                     out[k.strip()] = v.strip()
             return out
 
+        def _cookie_name(self):
+            # Over TLS the browser itself enforces the rules the name implies:
+            # __Host- means Secure, Path=/, and no Domain, so a sibling
+            # subdomain cannot plant a cookie that we would then read as a
+            # session. On plain http the prefix is not allowed at all.
+            return "__Host-dw_session" if opts.https else "dw_session"
+
         def _set_session_cookie(self, token):
-            bits = ["dw_session=" + token, "Path=/", "HttpOnly", "SameSite=Lax",
-                    "Max-Age=" + str(SESSION_DAYS * 86400)]
+            bits = [self._cookie_name() + "=" + token, "Path=/", "HttpOnly",
+                    "SameSite=Lax", "Max-Age=" + str(SESSION_DAYS * 86400)]
             if opts.https:
                 bits.append("Secure")
             return ("Set-Cookie", "; ".join(bits))
 
         def _clear_session_cookie(self):
-            bits = ["dw_session=", "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"]
+            bits = [self._cookie_name() + "=", "Path=/", "HttpOnly",
+                    "SameSite=Lax", "Max-Age=0"]
             if opts.https:
                 bits.append("Secure")
             return ("Set-Cookie", "; ".join(bits))
+
+        def _session_token(self):
+            c = self._cookies()
+            # Both names are read, so switching a running server to --https
+            # does not sign everybody out mid-session.
+            return c.get(self._cookie_name()) or c.get("dw_session")
 
         def _body(self):
             try:
@@ -353,7 +450,7 @@ def make_handler(store, opts):
                 return None, "Send JSON."
 
         def _me(self):
-            return store.session_user(self._cookies().get("dw_session"))
+            return store.session_user(self._session_token(), renew=True)
 
         def _same_origin(self):
             """Cross-site POSTs must not be able to act as somebody.
@@ -454,8 +551,7 @@ def make_handler(store, opts):
             if route.path == "/api/login":
                 return self._login(body)
             if route.path == "/api/logout":
-                token = self._cookies().get("dw_session")
-                store.drop_session(token)
+                store.drop_session(self._session_token())
                 return self._send(200, {"signedIn": False}, [self._clear_session_cookie()])
             if route.path == "/api/save":
                 return self._save(body)
@@ -490,7 +586,7 @@ def make_handler(store, opts):
         def _login(self, body):
             email = (body.get("email") or "").strip()
             password = body.get("password") or ""
-            who = "ip:" + self.address_string()
+            who = "ip:" + self._who()
             acct = "em:" + email.lower()
             if store.recent_attempts(who) >= LOGIN_MAX or \
                store.recent_attempts(acct) >= LOGIN_MAX:
@@ -559,9 +655,18 @@ def make_handler(store, opts):
                 return self._send(413, {
                     "error": "That save is bigger than your plan allows.",
                     "plan": plan, "limit": limit, "size": len(text.encode())})
-            store.put_save(me["id"], text)
+            since = body.get("updatedAt")
+            when = store.put_save(me["id"], text,
+                                  since if isinstance(since, int) else None)
+            if when is None:
+                row = store.get_save(me["id"])
+                return self._send(409, {
+                    "error": "Your account was saved somewhere else since you "
+                             "last loaded it.",
+                    "updatedAt": row["updated_at"] if row else None})
             return self._send(200, {"saved": True, "size": len(text.encode()),
-                                    "limit": limit, "plan": plan})
+                                    "limit": limit, "plan": plan,
+                                    "updatedAt": when})
 
         # -- billing --------------------------------------------------------
         def _checkout(self, body):
@@ -633,6 +738,15 @@ def parse_args(argv=None):
                    help="Exact origin(s) allowed to make state-changing requests. "
                         "Defaults to whatever Host the request came in on, which is "
                         "right behind a normal reverse proxy.")
+    p.add_argument("--trust-proxy", type=int, default=0, metavar="HOPS",
+                   help="How many reverse proxies are in front of this. Behind "
+                        "one, every request arrives from the proxy's address, so "
+                        "the per-address login limit becomes one bucket for the "
+                        "whole site and eight bad guesses lock everybody out. "
+                        "Set 1 for a single nginx/Caddy in front. Leave 0 when "
+                        "nothing is in front: X-Forwarded-For is trivially "
+                        "forged, and trusting it unasked hands anyone a fresh "
+                        "rate-limit bucket per request.")
     p.add_argument("--stripe-key", default=os.environ.get("STRIPE_SECRET_KEY"),
                    help="Payment provider secret. Without it, checkout answers 501.")
     p.add_argument("--quiet", action="store_true")

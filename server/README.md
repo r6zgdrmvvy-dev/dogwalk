@@ -31,12 +31,41 @@ database is not a set of keys to everybody's account. Changing a password drops
 every other session, because changing a password is usually somebody saying
 "get whoever it is out".
 
+Under `--https` the cookie is named `__Host-dw_session`, which makes the
+browser itself enforce Secure, `Path=/` and no `Domain` — so a sibling
+subdomain cannot plant a cookie this server would then read as a session. Both
+names are accepted on the way in, so turning `--https` on does not sign
+everybody out. Sessions renew as they are used rather than dying forty-five
+days after they were created, which would be somebody signed out mid-walk for
+no reason they can see.
+
 Request bodies are never logged, and neither are query strings — one of those
 is passwords and the other is where somebody walks their dog. Only the method
 and the path go to stderr.
 
+There is a `Content-Security-Policy` on everything. The page is a single file
+with its script and style inline, so `script-src` cannot be locked down without
+splitting it up — but `connect-src` is the directive that earns its keep here:
+it names the exact list of places this game is allowed to send anything, so an
+injected script cannot post a walk history off somewhere else.
+
+## Saving from two places at once
+
+Last-write-wins loses somebody's walks. A save carries the `updatedAt` the
+client was last shown; if the stored copy has moved on since, the write is
+refused with **409** and the game says so rather than picking a winner on its
+own — one of the two is somebody's actual history. Loading first is what lets
+the save through. A client that sends no `updatedAt` at all still works, so
+this is not a breaking change to anything already written.
+
 ## Before you point a domain at it
 
+- **Set `--trust-proxy 1` if there is a proxy in front.** Without it every
+  request appears to come from the proxy's address, so the per-address login
+  limit becomes one bucket for the whole site and eight bad guesses lock
+  everybody out. Leave it at 0 when nothing is in front: `X-Forwarded-For` is
+  trivially forged, and trusting it unasked hands anyone a fresh rate-limit
+  bucket per request.
 - **Put TLS in front of it and pass `--https`.** It speaks plain HTTP by
   design; terminate TLS at nginx, Caddy, or your host's proxy. Without
   `--https` the session cookie is not marked `Secure`, and it will warn you at

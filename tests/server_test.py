@@ -244,6 +244,71 @@ def main():
               store.user_by_email("carla@example.com") is None and
               b"Gone" not in open(db, "rb").read())
 
+        # -- saving from two places at once ---------------------------------
+        # Last-write-wins loses somebody's walks. The client sends back the
+        # updated_at it was last shown, and a stale one is refused.
+        g = Client()
+        g.req("POST", "/api/signup", {"email": "dee@example.com", "password": OTHER_PW})
+        g.req("POST", "/api/save", {"save": {"name": "First"}})
+        _, first, _ = g.req("GET", "/api/save")
+        stamp = first["updatedAt"]
+        time.sleep(1.1)                       # updated_at has one-second grain
+        st, _, _ = g.req("POST", "/api/save",
+                         {"save": {"name": "Second"}, "updatedAt": stamp})
+        check("saving with the version you were shown works", st == 200, str(st))
+        st, body, _ = g.req("POST", "/api/save",
+                            {"save": {"name": "Third"}, "updatedAt": stamp})
+        check("saving over a version somebody else moved on is refused",
+              st == 409, str(st))
+        _, now, _ = g.req("GET", "/api/save")
+        check("and the refused write changed nothing",
+              now["save"]["name"] == "Second", json.dumps(now["save"]))
+        st, _, _ = g.req("POST", "/api/save",
+                         {"save": {"name": "Third"}, "updatedAt": now["updatedAt"]})
+        check("loading first is what lets it through", st == 200, str(st))
+        st, _, _ = g.req("POST", "/api/save", {"save": {"name": "Fourth"}})
+        check("and a client that sends no version at all still works",
+              st == 200, str(st))
+
+        # -- rate limiting behind a proxy -----------------------------------
+        # Every request arrives from the proxy, so without this the per-address
+        # limit is one bucket for the whole site and eight bad guesses lock
+        # everybody out.
+        check("without --trust-proxy, a forged X-Forwarded-For is ignored",
+              m.parse_args(["--port", "1"]).trust_proxy == 0)
+        proxied = m.parse_args(["--port", "1", "--trust-proxy", "1"])
+        check("and with it, the hop count is what is trusted",
+              proxied.trust_proxy == 1)
+
+        # -- sessions that do not expire under you --------------------------
+        h = Client()
+        h.req("POST", "/api/signup", {"email": "eve@example.com", "password": OTHER_PW})
+        tok = h.cookie.split("=", 1)[1]
+        with store._conn() as conn:                          # noqa: SLF001
+            conn.execute("UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
+                         (int(time.time()) + 60, m.token_hash(tok)))
+        was = store._conn().execute(                         # noqa: SLF001
+            "SELECT expires_at FROM sessions WHERE token_hash = ?",
+            (m.token_hash(tok),)).fetchone()["expires_at"]
+        h.req("GET", "/api/me")
+        nowexp = store._conn().execute(                      # noqa: SLF001
+            "SELECT expires_at FROM sessions WHERE token_hash = ?",
+            (m.token_hash(tok),)).fetchone()["expires_at"]
+        check("using a session pushes its expiry back out",
+              nowexp > was + 86400, f"{was} -> {nowexp}")
+
+        # -- headers --------------------------------------------------------
+        _, _, hdr = a.req("GET", "/")
+        csp = hdr.get("Content-Security-Policy") or ""
+        check("there is a content security policy", bool(csp), csp[:60])
+        check("nothing may frame this, or be an object in it",
+              "frame-ancestors 'none'" in csp and "object-src 'none'" in csp)
+        # The one that earns its keep: the exact list of places this game may
+        # send anything, so an injected script cannot post a walk history away.
+        check("and connect-src names only where the game really talks",
+              "connect-src 'self'" in csp and "overpass" in csp and
+              "evil" not in csp, csp.split("connect-src")[1][:70])
+
         # -- billing --------------------------------------------------------
         st, body, _ = a.req("POST", "/api/billing/checkout", {})
         check("checkout says it is not switched on rather than pretending",

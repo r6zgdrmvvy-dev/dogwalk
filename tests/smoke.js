@@ -1776,6 +1776,24 @@ async function waitForReady(page) {
       await stub(app1);
       await app1.goto(srv.base);
       await firstRun(app1, "Rusty");
+      // Load real walks over the demo ones. Generated walks are deliberately
+      // not uploaded — they are nobody's history and they would spend storage
+      // somebody is paying for on data the game invented — so syncing has to
+      // be tested with the thing it is actually for.
+      const mine = [];
+      for (let i = 0; i < 12; i++) {
+        mine.push({ lat: 55.7952 + i * 0.0004, lng: -4.2955 + i * 0.0003,
+                    t: new Date(Date.UTC(2026, 7, 20, 7, i * 2, 0)).toISOString()
+                       .replace(/\.\d+Z$/, "Z") });
+      }
+      await app1.evaluate((pts) => {
+        document.getElementById("data-panel").classList.add("open");
+        document.getElementById("json-input").value = JSON.stringify(pts);
+        document.getElementById("btn-load").click();
+      }, mine);
+      await app1.waitForFunction(
+        () => window.dogwalk.state.points.length === 12 && !window.dogwalk.state.isDemo,
+        null, { timeout: 60000 });
       const walksHere = await app1.evaluate(() => window.dogwalk.state.points.length);
 
       await app1.evaluate(() => document.getElementById("account-panel").classList.add("open"));
@@ -1818,6 +1836,44 @@ async function waitForReady(page) {
       check("signing in on another device brings your dog and your walks with you",
             carried.points === walksHere && carried.name === "Rusty",
             JSON.stringify(carried) + " vs " + walksHere + " points here");
+
+      // Two devices, both pushing. Last-write-wins would quietly lose one of
+      // them, and one of them is somebody's walks.
+      await app2.evaluate(() => {
+        window.dogwalk.state.dogName = "Changed On Two";
+        document.getElementById("account-panel").classList.add("open");
+      });
+      await app2.click("#btn-push");
+      await app2.waitForFunction(
+        () => /Saved|Already saved/.test(document.getElementById("account-msg").textContent),
+        null, { timeout: 30000 });
+      await app1.evaluate(() => {
+        window.dogwalk.state.dogName = "Changed On One";
+        document.getElementById("account-panel").classList.add("open");
+      });
+      await app1.click("#btn-push");
+      await app1.waitForFunction(
+        () => /somewhere else|Saved|Already saved/.test(
+          document.getElementById("account-msg").textContent),
+        null, { timeout: 30000 });
+      check("a second device saving does not silently overwrite the first",
+            await app1.evaluate(() =>
+              /somewhere else/.test(document.getElementById("account-msg").textContent)),
+            await app1.evaluate(() =>
+              document.getElementById("account-msg").textContent));
+      // And the way out of it is offered rather than left to them to guess.
+      await app1.click("#btn-pull");
+      await app1.waitForFunction(
+        () => window.dogwalk.state.dogName === "Changed On Two",
+        null, { timeout: 30000 });
+      check("and loading first is what lets the save through",
+            await app1.evaluate(async () => {
+              document.getElementById("btn-push").click();
+              await new Promise((go) => setTimeout(go, 3000));
+              return !/somewhere else/.test(
+                document.getElementById("account-msg").textContent);
+            }), await app1.evaluate(() =>
+              document.getElementById("account-msg").textContent));
 
       // Signing out must leave the browser exactly as it was, not wipe it.
       await app2.evaluate(() => document.getElementById("account-panel").classList.add("open"));

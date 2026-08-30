@@ -6579,6 +6579,10 @@
       });
       stopWalk();
       buildFromPoints(data);
+      // These are somebody's actual walks, whatever was here before. Leaving
+      // the demo flag set meant real data inherited it and was then skipped by
+      // the sync, on the grounds that generated walks are not worth uploading.
+      state.isDemo = false;
       state.osmWays = null;
       routeCache = {};
       walkGraph = null; walkGraphKey = null;
@@ -7274,7 +7278,8 @@
   // served from somewhere static like Pages and there is no server to talk to.
   // Signing in adds one thing: the same dog and the same walks on your phone.
   var account = { signedIn: false, email: null, plan: "free", limit: 0,
-                  available: null, pushTimer: null, lastPushed: null };
+                  available: null, pushTimer: null, lastPushed: null,
+                  seenAt: null };
 
   function setAccountMsg(msg, cls) {
     var el = document.getElementById("account-msg");
@@ -7287,13 +7292,23 @@
   // own keys — a save is "your dog and where you have walked him", and it
   // being one object is what makes it one PUT.
   function collectSave() {
+    var b = state.bounds;
     return {
       v: 1,
       name: state.dogName,
-      points: state.points,
+      // Generated demo walks are not worth carrying. They can be made again
+      // anywhere, they are nobody's actual history, and uploading them spends
+      // the storage somebody is paying for on data the game invented.
+      points: state.isDemo ? [] : state.points,
       dog: { type: state.dogType, coat: state.dogCoat,
              collar: state.dogCollar, bond: state.bond },
       roamed: state.roamed,
+      // Where your town is, so somebody whose world came from a postcode gets
+      // their streets back on the next device rather than an empty map. This
+      // used to be missing, and the postcode route is the commonest way in.
+      place: b ? { label: state.placeLabel,
+                   lat: (b.minLat + b.maxLat) / 2,
+                   lng: (b.minLng + b.maxLng) / 2 } : null,
       isDemo: !!state.isDemo
     };
   }
@@ -7316,12 +7331,21 @@
     }
     applyDogName(save.name || "");
     state.isDemo = !!save.isDemo;
-    if (save.points.length >= 3) {
+    if (save.points && save.points.length >= 3) {
       stopWalk();
       buildFromPoints(save.points);
       routeCache = {}; walkGraph = null; walkGraphKey = null;
       saveLocal();
       return true;
+    }
+    // No walks, but we know where they walk. Rebuild the town from that, and
+    // make demo walks in it, so signing in somewhere new is a working game
+    // rather than a bare map.
+    if (save.place && isFinite(save.place.lat) && isFinite(save.place.lng)) {
+      stopWalk();
+      usefulPlace(save.place.lat, save.place.lng, save.place.label);
+      routeCache = {}; walkGraph = null; walkGraphKey = null;
+      return "place";
     }
     return false;
   }
@@ -7425,6 +7449,7 @@
 
   function pullSave(o) {
     return api("/api/save").then(function (res) {
+      account.seenAt = res.updatedAt || null;
       if (!res.save) {
         if (!(o && o.quiet)) setAccountMsg("Nothing saved to your account yet.", "");
         // First sign-in on a browser that has walks: put them up.
@@ -7440,7 +7465,11 @@
                       "press Save to your account to upload them.", "ok");
         return null;
       }
-      if (applySave(res.save)) {
+      var how = applySave(res.save);
+      if (how === "place") {
+        rebuildFromData().then(function () { return makeDemo(false); });
+        setAccountMsg("Loaded your town back. Made some demo walks in it.", "ok");
+      } else if (how) {
         rebuildFromData();
         setAccountMsg("Loaded " + theirs + " points from your account.", "ok");
       }
@@ -7458,8 +7487,10 @@
       return Promise.resolve(null);
     }
     if (!(o && o.quiet)) setAccountMsg("Saving…", "busy");
-    return api("/api/save", { save: save }).then(function (res) {
+    return api("/api/save", { save: save, updatedAt: account.seenAt })
+      .then(function (res) {
       account.lastPushed = body;
+      account.seenAt = res.updatedAt || account.seenAt;
       account.plan = res.plan || account.plan;
       account.limit = res.limit || account.limit;
       renderAccount();
@@ -7468,7 +7499,14 @@
       }
       return res;
     }).catch(function (e) {
-      if (e.status === 413) {
+      if (e.status === 409) {
+        // Another device saved since this one last looked. Rather than pick a
+        // winner on its own — one of them is somebody's walks — say so and let
+        // them look at what is up there first.
+        setAccountMsg("Your account was saved from somewhere else since you " +
+                      "last loaded it. Press Load from my account to see it, " +
+                      "then Save if you still want this browser's version.");
+      } else if (e.status === 413) {
         setAccountMsg("That is more than the free plan keeps (" +
                       Math.round((e.body.limit || 0) / 1024) + "KB). " +
                       "Subscribe, or load fewer days.");
