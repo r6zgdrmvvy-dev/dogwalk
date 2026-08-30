@@ -39,6 +39,34 @@ function serve() {
   return new Promise((r) => server.listen(0, "127.0.0.1", () => r(server)));
 }
 
+// A stand-in for `export_tractive.py --serve`, on the port the page looks at.
+// A real server rather than a routed stub on purpose: the whole question is
+// whether the browser will let a page reach loopback and whether the CORS
+// headers are right, and route interception would sidestep both.
+function stubBridge(points) {
+  const server = http.createServer((req, res) => {
+    const origin = req.headers.origin;
+    const ok = origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    if (!ok) { res.writeHead(403).end('{"error":"origin not allowed"}'); return; }
+    const h = {
+      "content-type": "application/json",
+      "access-control-allow-origin": origin,
+      "access-control-allow-private-network": "true",
+      vary: "Origin",
+    };
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, Object.assign({ "access-control-allow-methods": "GET, OPTIONS" }, h));
+      res.end();
+      return;
+    }
+    res.writeHead(200, h);
+    res.end(req.url.startsWith("/health")
+      ? JSON.stringify({ ok: true, tracker: "TESTTRACKER", maxDays: 365 })
+      : JSON.stringify(points));
+  });
+  return new Promise((r) => server.listen(8765, "127.0.0.1", () => r(server)));
+}
+
 async function stub(page) {
   for (const host of ["overpass-api.de", "overpass.kumi.systems", "overpass.openstreetmap.ru"]) {
     await page.route("https://" + host + "/api/interpreter", (r) =>
@@ -922,43 +950,80 @@ async function waitForReady(page) {
     const ranged = await page.evaluate(async () => {
       const d = window.dogwalk, s = window.game.scene.getScene("world"), w = s.worldRef;
       const r = d.roam;
-      // Stand in the park and stay still, so the only thing moving him is him.
-      let placed = false;
-      for (let ty = 0; ty < w.rows && !placed; ty++) {
-        for (let tx = 0; tx < w.cols && !placed; tx++) {
+      // Stand in the MIDDLE of the park and stay still, so the only thing
+      // moving him is him. The first park tile found is a corner, where most
+      // of his wander ring lands in walls and gets rejected — which made the
+      // two ends of the meter look alike for reasons nothing to do with bond.
+      let sx = 0, sy = 0, n = 0;
+      for (let ty = 0; ty < w.rows; ty++) {
+        for (let tx = 0; tx < w.cols; tx++) {
+          if (!w.park[ty * w.cols + tx]) continue;
+          sx += tx; sy += ty; n++;
+        }
+      }
+      if (!n) return null;
+      let placed = null, best = 1e9;
+      for (let ty = 0; ty < w.rows; ty++) {
+        for (let tx = 0; tx < w.cols; tx++) {
           if (!w.park[ty * w.cols + tx]) continue;
           const mx = (tx + 0.5) * w.mpt, my = (ty + 0.5) * w.mpt;
           if (s.blocked(mx, my)) continue;
-          r.x = mx; r.y = my; placed = true;
+          const d = Math.hypot(tx - sx / n, ty - sy / n);
+          if (d < best) { best = d; placed = { x: mx, y: my }; }
         }
       }
       if (!placed) return null;
+      r.x = placed.x; r.y = placed.y;
       const wait = (ms) => new Promise((go) => setTimeout(go, ms));
       const runFor = async (bond) => {
         d.state.bond = bond;
         r.offLead = true; r.recalling = false; r.squirrel = null;
         r.nextSquirrel = 999; r.dog.want = null; r.dog.sniffFor = 0;
-        // Both start at your heel and you stand still throughout, so the only
-        // thing deciding how far he gets is how far he wants to be.
-        r.dog.x = r.x + 1.5; r.dog.y = r.y;
+        // Every lamp post and tree back on the table. Without this the first
+        // run eats the ones next to you and the second has to range further to
+        // find an untouched one — which read as the better-bonded dog going
+        // FURTHER, an artefact of the running order and nothing to do with him.
+        (r.interests || []).forEach((i) => { i.done = false; i.cool = 0; });
+        // Both start well out and you stand still throughout, so the only
+        // thing deciding where he ends up is how far out he is willing to be.
+        //
+        // Starting him at your heel instead does not work: with something worth
+        // sniffing every eight metres he takes the nearest one each time, and
+        // that is a random walk in eight-metre steps. It gets to its bound
+        // eventually, but not inside a test, and both ends of the meter measure
+        // the same six metres — which says nothing about either dog.
+        let out = null;
+        for (let dist = 30; dist > 6 && !out; dist -= 2) {
+          for (let a = 0; a < 12 && !out; a++) {
+            const th = a * Math.PI / 6;
+            const x = r.x + Math.cos(th) * dist, y = r.y + Math.sin(th) * dist;
+            if (!s.dogBlocked(x, y)) out = { x: x, y: y, d: dist };
+          }
+        }
+        if (!out) return null;
+        r.dog.x = out.x; r.dog.y = out.y;
         r.dog.wander = null; r.dog.wanderFor = 0;
         r.still = 5;
-        let worst = 0;
-        for (let i = 0; i < 30; i++) {
+        // The average of the second half only: the first is him travelling to
+        // wherever he is going to settle, which is not the answer.
+        let sum = 0, took = 0;
+        for (let i = 0; i < 40; i++) {
           await wait(120);
           r.still = 5;                       // you have not moved
-          worst = Math.max(worst, Math.hypot(r.dog.x - r.x, r.dog.y - r.y));
+          if (i >= 20) { sum += Math.hypot(r.dog.x - r.x, r.dog.y - r.y); took++; }
         }
-        return Math.round(worst);
+        return Math.round(sum / took);
       };
       const loose = await runFor(5);
       const steady = await runFor(95);
+      if (loose === null || steady === null) return null;
       return { loose, steady, park: true };
     });
     if (ranged) {
       check("a dog who trusts you stays near you off the lead",
-            ranged.steady < ranged.loose,
-            "barely listening " + ranged.loose + "m, inseparable " + ranged.steady + "m");
+            ranged.steady < ranged.loose * 0.8,
+            "barely listening " + ranged.loose + "m out on average, inseparable " +
+            ranged.steady + "m");
     }
 
     // The unlock: steady enough, and a proper footpath will do — but never the
@@ -1497,6 +1562,55 @@ async function waitForReady(page) {
     check("an unknown postcode is reported, not swallowed", await page.evaluate(() =>
       /find/i.test(document.getElementById("place-msg").textContent)),
       await page.evaluate(() => document.getElementById("place-msg").textContent));
+
+    // ---------- syncing from a tracker ----------
+    // With nothing listening, the button has to say so quickly and hand you
+    // the line to run — the commonest case by far is "I have not started it".
+    // Opened directly: by this point the postcode check has already left the
+    // panel up, and clicking the button behind it hits the overlay instead.
+    await page.evaluate(() => document.getElementById("data-panel").classList.add("open"));
+    await page.waitForTimeout(200);
+    await page.click("#btn-sync");
+    await page.waitForFunction(
+      () => !document.getElementById("btn-sync").disabled, null, { timeout: 20000 });
+    const noBridge = await page.evaluate(() => ({
+      msg: document.getElementById("sync-msg").textContent,
+      err: document.getElementById("sync-msg").className,
+      shown: !document.getElementById("sync-how").hidden,
+      how: document.getElementById("sync-how").textContent,
+    }));
+    check("with no bridge running, sync says so rather than hanging",
+          noBridge.err === "err" && noBridge.shown, JSON.stringify(noBridge));
+    check("and shows the line to run", /--serve/.test(noBridge.how), noBridge.how);
+
+    // Now start one. Real server, real CORS, real loopback fetch.
+    const bridge = await stubBridge([
+      { lat: 55.7952, lng: -4.2955, t: "2026-08-20T07:00:00Z" },
+      { lat: 55.7961, lng: -4.2941, t: "2026-08-20T07:02:00Z" },
+      { lat: 55.7973, lng: -4.2930, t: "2026-08-20T07:05:00Z" },
+      { lat: 55.7984, lng: -4.2922, t: "2026-08-20T07:09:00Z" },
+    ]);
+    try {
+      await page.evaluate(() => document.getElementById("data-panel").classList.add("open"));
+      await page.waitForTimeout(200);
+      await page.fill("#sync-days", "7");
+      await page.click("#btn-sync");
+      await page.waitForFunction(
+        () => /Synced|went wrong|did not answer/.test(
+          document.getElementById("sync-msg").textContent),
+        null, { timeout: 60000 });
+      const synced = await page.evaluate(() => ({
+        msg: document.getElementById("sync-msg").textContent,
+        cls: document.getElementById("sync-msg").className,
+        points: window.dogwalk.state.points.length,
+        walks: window.dogwalk.state.walks.length,
+      }));
+      check("a running bridge syncs straight into the game",
+            synced.cls === "ok" && synced.points === 4, JSON.stringify(synced));
+      check("and the walk is there to play", synced.walks > 0, JSON.stringify(synced));
+    } finally {
+      bridge.close();
+    }
 
     check("no page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
     await page.close();

@@ -459,6 +459,24 @@
   #data-msg.err { color: #e88; }
   input[type=file] { display: none; }
 
+  /* Sync. The command line is the thing to copy when the bridge is not up, so
+     it gets to look like something you copy rather than like prose. */
+  .field.inline { display: flex; align-items: center; gap: 6px; margin: 0;
+    font-size: 12px; opacity: 0.75; }
+  .field.inline input { width: 64px; background: #12100e; color: var(--ink);
+    border: 2px solid var(--panel-edge); border-radius: 8px; padding: 6px 8px;
+    font: inherit; font-size: 12px; }
+  #sync-msg { font-size: 13px; margin-top: 9px; min-height: 18px; }
+  #sync-msg.ok { color: var(--good); }
+  #sync-msg.err { color: #e88; }
+  #sync-msg.busy { color: var(--accent); }
+  #sync-how {
+    margin: 8px 0 0; padding: 9px 10px; background: #12100e;
+    border: 2px solid var(--panel-edge); border-radius: 8px;
+    font-family: ui-monospace, monospace; font-size: 12px; color: #cfe6c0;
+    overflow-x: auto; user-select: all;
+  }
+
   @media (max-width: 720px) {
     #hud-top { padding: 6px; gap: 6px; }
     .stats { gap: 5px; }
@@ -650,8 +668,21 @@
     </div>
     <div id="place-msg"></div>
 
-    <h3 class="sub">Got GPS data from a tracker?</h3>
-    <p>Paste GPS points as <code>[{"lat":55.79,"lng":-4.29,"t":"2026-08-10T07:12:00Z"}]</code>,
+    <h3 class="sub">Got a Tractive tracker?</h3>
+    <p>Start the bridge on your own machine and this button pulls your walks
+       straight in. Your Tractive password is typed into that terminal and stays
+       there — this page never sees it, and nothing is uploaded anywhere.</p>
+    <div class="row">
+      <button class="btn primary" id="btn-sync">Sync from Tractive</button>
+      <label class="field inline">Days
+        <input type="number" id="sync-days" value="30" min="1" max="365">
+      </label>
+    </div>
+    <div id="sync-msg"></div>
+    <pre id="sync-how" hidden>python3 scripts/export_tractive.py --serve</pre>
+
+    <h3 class="sub">Or paste it in yourself</h3>
+    <p>GPS points as <code>[{"lat":55.79,"lng":-4.29,"t":"2026-08-10T07:12:00Z"}]</code>,
        or load a <code>guinness_walk.json</code> exported by <code>scripts/export_tractive.py</code>.</p>
     <label class="field">Your dog's name
       <input type="text" id="dog-name" placeholder="Your Dog" maxlength="24">
@@ -4471,15 +4502,26 @@
       // staying near checks back and keeps himself inside a few metres of you;
       // one who has not is a speck at the far end of the park. Nobody is pulling
       // him — he is choosing it, which is exactly the thing being bought.
+      var stray = 0;
       if (roam.offLead) {
         var b = bondF();
-        var stray = 34 - 22 * b;              // 34m barely listening, 12m inseparable
+        stray = 34 - 22 * b;                  // 34m barely listening, 12m inseparable
         var away = Math.hypot(d.x - roam.x, d.y - roam.y);
         if (away > stray) {
           d.want = null;
           // Well bonded he comes straight back; barely listening he only drifts
           // vaguely your way, so you still have to whistle him.
           return { x: roam.x, y: roam.y, urgent: b > 0.5 };
+        }
+        // And he will not take an interest in something that would put him out
+        // there in the first place. Without this the tether is nearly dead
+        // weight: interests sit every eight metres, so he hops one to the next
+        // and only ever gets pulled up at the far end — measured at seven
+        // metres out for a dog who barely knows you and six for one who adores
+        // you, which is no difference at all. Judging the thing he is about to
+        // go for by how far it is from *you* is what makes the meter visible.
+        if (d.want && Math.hypot(d.want.x - roam.x, d.want.y - roam.y) > stray) {
+          d.want = null;
         }
       }
 
@@ -4490,6 +4532,10 @@
         // with you: thirty metres at the start, a dozen once he is steady.
         var reach = roam.offLead ? 12 + (SNIFF_FREE_M - 12) * (1 - bondF()) : SNIFF_NEAR_M;
         d.want = this.nearestWant(d.x, d.y, reach);
+        if (roam.offLead && d.want &&
+            Math.hypot(d.want.x - roam.x, d.want.y - roam.y) > stray) {
+          d.want = null;
+        }
         d.strainFor = 0;
       }
       if (d.want) return { x: d.want.x, y: d.want.y, urgent: false };
@@ -6328,6 +6374,98 @@
     el.className = ok ? "ok" : "err";
   }
 
+  // ---------- syncing from a tracker ----------
+  // Tractive's API sends no CORS headers of any kind — its preflight comes back
+  // 200 with no Access-Control-Allow-* at all — so no browser can talk to it
+  // from any origin. That is measured, not assumed, and it is the whole reason
+  // this goes through a bridge you run yourself: the alternative is a server
+  // that holds your Tractive password for you, which is a much bigger promise
+  // than this project is in a position to make.
+  //
+  // An https page is allowed to reach http://127.0.0.1 — loopback is exempt
+  // from mixed-content blocking — so the published copy of the game can use it
+  // exactly as a local one does.
+  var SYNC_ORIGIN = "http://127.0.0.1:8765";
+  var SYNC_WAIT = 4000;               // long enough for a local answer, short
+                                      // enough that "not running" is quick
+  function setSyncMsg(msg, cls) {
+    var el = document.getElementById("sync-msg");
+    el.textContent = msg;
+    el.className = cls || "";
+  }
+
+  // fetch() has no timeout of its own, and the failure that matters most here
+  // — no bridge running — should be reported in a moment rather than whenever
+  // the network stack gives up.
+  function fetchSoon(url, ms) {
+    if (window.AbortController) {
+      var ac = new AbortController();
+      var timer = setTimeout(function () { ac.abort(); }, ms);
+      return fetch(url, { signal: ac.signal, cache: "no-store" })
+        .finally(function () { clearTimeout(timer); });
+    }
+    return fetch(url, { cache: "no-store" });
+  }
+
+  function syncFromTractive() {
+    var btn = document.getElementById("btn-sync");
+    var how = document.getElementById("sync-how");
+    var days = parseInt(document.getElementById("sync-days").value, 10);
+    if (!isFinite(days) || days < 1) days = 30;
+    days = Math.min(365, days);
+
+    btn.disabled = true;
+    how.hidden = true;
+    setSyncMsg("Looking for the bridge…", "busy");
+
+    // Health first, so "you have not started it" and "it is there but the sync
+    // failed" are two different messages rather than one shrug.
+    fetchSoon(SYNC_ORIGIN + "/health", SYNC_WAIT).then(function (r) {
+      if (!r.ok) throw new Error("bridge said " + r.status);
+      return r.json();
+    }).then(function (health) {
+      // The bridge walks the history a week at a time with a pause between,
+      // to be polite to an undocumented API — so a long window is genuinely a
+      // minute of waiting, and saying so beats a button that looks hung.
+      var slow = days > 60 ? " This one will take a minute." : "";
+      setSyncMsg("Bridge found" + (health.tracker ? " (tracker " + health.tracker + ")" : "") +
+                 ". Asking Tractive for " + days + " days…" + slow, "busy");
+      // No timeout on this one: a month of history off an undocumented API
+      // legitimately takes a while, and cutting it off at four seconds would
+      // fail every real sync.
+      return fetch(SYNC_ORIGIN + "/walks?days=" + days, { cache: "no-store" });
+    }).then(function (r) {
+      return r.json().then(function (body) {
+        if (!r.ok) throw new Error(body && body.error ? body.error : "sync failed");
+        return body;
+      });
+    }).then(function (points) {
+      if (!Array.isArray(points) || !points.length) {
+        throw new Error("Tractive had nothing for the last " + days + " days");
+      }
+      setSyncMsg("Got " + points.length + " points. Building your map…", "busy");
+      loadJson(JSON.stringify(points));
+      setSyncMsg("Synced " + points.length + " points.", "ok");
+    }).catch(function (e) {
+      // An aborted or refused fetch is indistinguishable from a CORS failure
+      // by design, so this cannot say which — but by far the likeliest reason
+      // is that nothing is listening, so that is what it leads with.
+      // "Failed to fetch" is what a browser says for a connection refused, a
+      // blocked origin and a dropped network alike — it will not tell a page
+      // which, on purpose. Saying that back to somebody is no help, so this
+      // says the thing that is nearly always true instead.
+      var why = (e && (e.name === "AbortError" || e.name === "TypeError" ||
+                       /failed to fetch|load failed|networkerror/i.test(e.message || "")))
+              ? "Nothing answered on port 8765."
+              : (e && e.message) ? e.message : "Something went wrong.";
+      setSyncMsg(why + " Start the bridge on the machine you are sitting at:", "err");
+      how.hidden = false;
+      if (window.console) console.warn("tractive sync", e);
+    }).finally(function () {
+      btn.disabled = false;
+    });
+  }
+
   function loadJson(text) {
     try {
       var data = JSON.parse(text);
@@ -7213,6 +7351,7 @@
   document.getElementById("btn-close-data").addEventListener("click", function () {
     document.getElementById("data-panel").classList.remove("open");
   });
+  document.getElementById("btn-sync").addEventListener("click", syncFromTractive);
   document.getElementById("btn-load").addEventListener("click", function () {
     var t = document.getElementById("json-input").value.trim();
     if (!t) { setDataMsg("Paste some JSON first.", false); return; }

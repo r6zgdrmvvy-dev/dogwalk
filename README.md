@@ -479,6 +479,92 @@ This writes `walks.json` (override with `--output`) in the
 options (specific tracker ID, clipboard copy, a `--raw` dump of the untouched
 API response for debugging).
 
+### The sync button
+
+Saving a file and loading it by hand is a chore, so the same script will stay
+running and answer the game directly:
+
+```bash
+python scripts/export_tractive.py --serve
+```
+
+Then open the game — the published copy at the link above is fine — and press
+**Sync from Tractive** in the data panel. Your walks come straight in.
+
+**Why a local bridge rather than the page doing it itself.** Because the page
+cannot. Tractive's API sends no CORS headers of any kind: its preflight comes
+back `200` with no `Access-Control-Allow-*` at all, and a real request carries
+`Vary: Origin` but never an `Access-Control-Allow-Origin`. That was measured
+against the live endpoint, not assumed. No browser will hand a page that
+response, from any origin, ever. So the only two ways to sync are a helper on
+your own machine or a server that holds your Tractive password on your behalf —
+and Tractive has no OAuth, so "holds your password" is the literal truth of the
+second one. This is the first.
+
+The awkward-looking part — an `https://` page talking to `http://127.0.0.1` —
+is fine and deliberate: loopback is exempt from mixed-content blocking, which
+was also measured rather than assumed (a self-signed HTTPS page fetching a
+loopback server, with and without each header, to find which ones are actually
+load-bearing: the CORS header is, the Private Network Access one is not yet but
+is sent anyway for the Chrome build where it will be).
+
+What the bridge does and does not do:
+
+- Your credentials are typed into **your terminal** and stay in that process.
+  The page never sees them and never learns anything about your Tractive
+  account beyond the tracker's id.
+- It binds to `127.0.0.1` only, so nothing else on your network can see it.
+- Only listed origins may read from it — the published game, plus anything on
+  localhost. Not `null`, not other `github.io` sites. A fork adds its own with
+  `--allow-origin https://you.github.io`. This matters more than it looks: while
+  the bridge is up, whatever it allows can read where your dog has been, and a
+  walk trail starts at your front door.
+- It shuts itself down after 15 idle minutes (`--idle-minutes`), because a
+  bridge left running for a week is a door left open for a week.
+- It caches for 90 seconds, so leaning on the button does not lean on an
+  undocumented API somebody else is paying for.
+
+A long window is genuinely slow — the history is walked a week at a time with a
+pause between, so a year is about a minute — and the button says so rather than
+looking hung.
+
+### What "accounts" would actually cost
+
+The obvious next step is signing in on the site and having your walks just be
+there, on any device. It is worth being clear about what that buys and what it
+costs, because the cost is not the usual one.
+
+Tractive has no OAuth. There is no scoped, revocable, per-application token to
+ask for — the only credential is the account email and password, the same one
+that unlocks live tracking on a real animal. A hosted sync therefore means a
+server that holds a reusable secret for your Tractive account, and "we only
+store the derived token" is a smaller claim than it sounds, since that token is
+minted from the password and you cannot revoke it individually without changing
+the password.
+
+So the honest shape of it:
+
+1. **Server holds the token, never the password.** Sign in from the browser,
+   the server exchanges it with Tractive once, keeps only the token, encrypted
+   with a per-user key from a managed KMS, and you re-authenticate when it
+   expires. The password exists in memory for one request and is never logged.
+2. **Bodies are never logged**, and the walk data is treated as location
+   history rather than as rows in a table: it is home-address adjacent by
+   construction.
+3. **Say plainly what a breach exposes** — a live GPS tracker on somebody's dog
+   and, by implication, where they live. That sentence belongs in the sign-up
+   flow, not in a policy nobody reads.
+4. Accounts bring their own weight besides: email verification, deletion that
+   actually deletes, a bill for somebody, and being the party responsible when
+   an undocumented third-party API changes shape.
+
+The recommendation is not to build that until somebody actually wants it. The
+local bridge gets nearly all of the convenience — a button, in the real hosted
+game — at none of that liability, because the secret never leaves the machine
+its owner is sitting at. If accounts do get built, the bridge should stay: it is
+the version that works for people who would rather not hand their tracker
+password to a hobby project, and that is a reasonable thing to prefer.
+
 Because Tractive's history endpoint isn't publicly documented, the script
 parses responses defensively rather than assuming one fixed schema. It has now
 been run against a live account and produced a usable month of history; if a
@@ -498,10 +584,10 @@ what the API actually returned.
   spans several kilometres still has to be drawn coarsely, because the tile
   count is capped; local walks, which are the overwhelming majority, come out
   at about two metres per tile.
-- Multi-user "connect your own Tractive account" support (rather than a
-  local per-person export script) is a bigger step — it needs a backend,
-  since Tractive only supports raw email/password auth (no OAuth), which
-  changes how account credentials would need to be handled.
+- Hosted, multi-user "connect your own Tractive account" support is still not
+  built, on purpose — see *What "accounts" would actually cost* above. The
+  `--serve` bridge covers the one-click case without anybody having to hold
+  somebody else's tracker password.
 
 ## Art
 
@@ -672,8 +758,16 @@ node tests/smoke.js
 Set `CHROMIUM_PATH` if you already have a browser and would rather not download
 another (`CHROMIUM_PATH=/opt/pw-browsers/chromium node tests/smoke.js`).
 
-Serves the repo, stubs Overpass with a small hand-written fixture so the run is
-offline, and checks the things that have actually broken before: the splash
+There is a second, much smaller suite for the sync bridge, which needs no
+browser and no Tractive account — it runs the real HTTP layer against a stubbed
+client:
+
+```bash
+python3 tests/bridge_test.py
+```
+
+The browser suite serves the repo, stubs Overpass with a small hand-written
+fixture so the run is offline, and checks the things that have actually broken before: the splash
 never clearing, walks not being found in a feed, playback not starting, the HUD
 panels trapping you on a phone, and silent page errors. It found two real faults
 the first time it ran.
