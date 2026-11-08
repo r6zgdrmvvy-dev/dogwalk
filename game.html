@@ -1371,16 +1371,140 @@
         });
       })();
     };
-    var attempt = function (i) {
-      if (i >= OVERPASS.length) return Promise.resolve(null);
-      var ctl = new AbortController();
-      var timer = setTimeout(function () { ctl.abort(); }, 20000);
-      return fetch(OVERPASS[i], { method: "POST", body: "data=" + encodeURIComponent(query), signal: ctl.signal })
-        .then(function (r) { clearTimeout(timer); if (!r.ok) throw new Error(r.status); return read(r); })
-        .then(function (d) { return d.elements || []; })
-        .catch(function () { clearTimeout(timer); return attempt(i + 1); });
-    };
-    return attempt(0);
+    // Hedged, not serial. One mirror at a time with a twenty-second timeout
+    // each meant a minute of staring at a progress bar before being told there
+    // was no map — and the public Overpass instance is overloaded often enough
+    // that this is the normal case, not the rare one. So: start the first,
+    // and if it has not answered in seven seconds start the next alongside it.
+    // First usable answer wins and the rest are dropped.
+    //
+    // Staggered rather than all three at once because these are free services
+    // somebody else pays for, and three queries where one would do is rude.
+    var HEDGE_MS = 7000, GIVE_UP_MS = 25000;
+    return new Promise(function (resolve) {
+      var done = false, live = 0, started = 0, ctls = [];
+      var finish = function (v) {
+        if (done) return;
+        done = true;
+        ctls.forEach(function (c) { try { c.abort(); } catch (e) { /* gone */ } });
+        resolve(v);
+      };
+      var overall = setTimeout(function () { finish(null); }, GIVE_UP_MS);
+      var start = function () {
+        if (done || started >= OVERPASS.length) return;
+        var url = OVERPASS[started++];
+        live++;
+        var ctl = new AbortController();
+        ctls.push(ctl);
+        if (started < OVERPASS.length) setTimeout(start, HEDGE_MS);
+        fetch(url, { method: "POST", body: "data=" + encodeURIComponent(query),
+                     signal: ctl.signal })
+          .then(function (r) { if (!r.ok) throw new Error(r.status); return read(r); })
+          .then(function (d) { clearTimeout(overall); finish(d.elements || []); })
+          .catch(function () {
+            live--;
+            // Everything we were going to try has now failed. No point
+            // waiting out the overall timeout to say so.
+            if (!done && live === 0 && started >= OVERPASS.length) {
+              clearTimeout(overall);
+              finish(null);
+            } else {
+              start();
+            }
+          });
+      };
+      start();
+    });
+  }
+
+  // ---------- keeping the map ----------
+  // A town is a megabyte or two of OSM ways and it does not change from one
+  // day to the next, so refetching it on every reload is slow when Overpass is
+  // well and fatal when it is not — which, being free and overloaded, it often
+  // is. Kept in IndexedDB rather than localStorage because localStorage holds
+  // about five megabytes for everything and one town would eat it.
+  var MAP_DB = "dogwalk-maps", MAP_STORE = "ways", MAP_KEEP_DAYS = 45;
+  var mapDb = null;
+
+  function openMapDb() {
+    if (mapDb) return mapDb;
+    mapDb = new Promise(function (resolve) {
+      if (!window.indexedDB) { resolve(null); return; }
+      var req;
+      try { req = indexedDB.open(MAP_DB, 1); } catch (e) { resolve(null); return; }
+      req.onupgradeneeded = function () {
+        var db = req.result;
+        if (!db.objectStoreNames.contains(MAP_STORE)) db.createObjectStore(MAP_STORE);
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      // Private browsing, a full disk, a browser with it switched off: the
+      // game works without this, it is just slower and needs the network.
+      req.onerror = function () { resolve(null); };
+      req.onblocked = function () { resolve(null); };
+    });
+    return mapDb;
+  }
+
+  // Any kept map that covers the box being asked for, not only one filed under
+  // exactly that box. The bounds move for all sorts of reasons — a different
+  // walk in the same town, or a demo world whose walks sit inside the place it
+  // was built around — and refetching a megabyte of the same streets because
+  // the rectangle shifted forty metres is the whole problem this is here to
+  // avoid. Smallest covering box wins, so a tight map is preferred to a loose
+  // one when both would do.
+  function mapCacheGet(key, b) {
+    return openMapDb().then(function (db) {
+      if (!db) return null;
+      return new Promise(function (resolve) {
+        var tx;
+        try {
+          tx = db.transaction(MAP_STORE, "readonly").objectStore(MAP_STORE);
+        } catch (e) { resolve(null); return; }
+        var cutoff = Date.now() - MAP_KEEP_DAYS * 86400000;
+        var exact = tx.get(key);
+        exact.onerror = function () { resolve(null); };
+        exact.onsuccess = function () {
+          var v = exact.result;
+          if (v && v.ways && v.ways.length && (v.at || 0) > cutoff) {
+            resolve(v.ways);
+            return;
+          }
+          if (!b) { resolve(null); return; }
+          var all;
+          try { all = tx.getAllKeys(); } catch (e) { resolve(null); return; }
+          all.onerror = function () { resolve(null); };
+          all.onsuccess = function () {
+            var best = null, bestArea = Infinity;
+            (all.result || []).forEach(function (k) {
+              var p = String(k).split(",").map(Number);
+              if (p.length !== 4 || p.some(function (n) { return !isFinite(n); })) return;
+              if (p[0] > b.minLat || p[1] > b.minLng ||
+                  p[2] < b.maxLat || p[3] < b.maxLng) return;
+              var area = (p[2] - p[0]) * (p[3] - p[1]);
+              if (area < bestArea) { bestArea = area; best = k; }
+            });
+            if (!best) { resolve(null); return; }
+            var g = tx.get(best);
+            g.onerror = function () { resolve(null); };
+            g.onsuccess = function () {
+              var w = g.result;
+              resolve(w && w.ways && w.ways.length && (w.at || 0) > cutoff
+                      ? w.ways : null);
+            };
+          };
+        };
+      });
+    }).catch(function () { return null; });
+  }
+
+  function mapCachePut(key, ways) {
+    return openMapDb().then(function (db) {
+      if (!db || !ways || !ways.length) return;
+      try {
+        db.transaction(MAP_STORE, "readwrite").objectStore(MAP_STORE)
+          .put({ ways: ways, at: Date.now() }, key);
+      } catch (e) { /* out of quota, or no store: not worth telling anybody */ }
+    }).catch(function () { /* same */ });
   }
 
   // Map-fetch progress across a band. With a Content-Length this is the real
@@ -5946,23 +6070,53 @@
   // Move the world to this walk's patch of the map and rebuild it. Resolves
   // once the map data is actually in, so playback can wait for it rather than
   // starting the dog off across blank ground.
+  // Memory, then disk, then the network. Overpass is free, overloaded and
+  // regularly returns 503, and before this a town you had already built would
+  // come back as a bare green field the moment it did — so once a map has been
+  // fetched it is kept, and the network is only the last resort.
+  function mapFor(b, lo, hi) {
+    var key = boundsKey(b);
+    if (osmCache[key]) return Promise.resolve(osmCache[key]);
+    setProgress(lo, "Looking for the map");
+    return mapCacheGet(key, b).then(function (kept) {
+      if (kept) {
+        osmCache[key] = kept;
+        return kept;
+      }
+      setProgress(lo, "Fetching the map");
+      return overpass(areaQuery(b), fetchProgress(lo, hi)).then(function (ways) {
+        if (ways && ways.length) {
+          osmCache[key] = ways;
+          mapCachePut(key, ways);
+        }
+        return ways;
+      });
+    });
+  }
+
+  // Said once, and said properly. "Map data unavailable" next to a blank field
+  // leaves you wondering what you did wrong; it is almost always the free
+  // Overpass service being overloaded, which is nobody's fault and does get
+  // better, so the thing to say is that and how to try again.
+  function noMapHere() {
+    toast("The map service is busy — showing plain ground. Press Map, then " +
+          "Take me there, to try again.");
+  }
+
   function focusWorldOn(walk) {
     var b = boundsForWalk(walk);
-    var key = boundsKey(b);
     if (!sameBounds(b, state.bounds)) {
       state.bounds = b;
-      state.osmWays = osmCache[key] || null;
+      state.osmWays = osmCache[boundsKey(b)] || null;
     }
     if (state.osmWays) {
       return queueBuild(10, 100);
     }
-    setProgress(10, "Fetching the map");
-    return overpass(areaQuery(b), fetchProgress(10, 55)).then(function (ways) {
+    return mapFor(b, 10, 55).then(function (ways) {
       if (ways && ways.length && sameBounds(b, state.bounds)) {
-        osmCache[key] = ways;
         state.osmWays = ways;
       } else if (!ways || !ways.length) {
-        toast("Map data unavailable — showing plain ground");
+        noMapHere();
       }
       return queueBuild(55, 100);
     });
@@ -6118,7 +6272,14 @@
   function saveLocal() {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
-        name: state.dogName, points: state.points
+        name: state.dogName, points: state.points,
+        // Which patch of the world this was built around. Without it the
+        // bounds get recomputed from the walks on the next load, come out a
+        // few tens of metres off, and miss the kept map — so a town you
+        // already had would be refetched, or be a bare field if the map
+        // service happened to be down.
+        bounds: state.bounds, placeLabel: state.placeLabel,
+        isDemo: !!state.isDemo
       }));
       return true;
     } catch (e) {
@@ -6604,13 +6765,11 @@
   function rebuildFromData() {
     var b = state.bounds;
     resetProgress();
-    setProgress(10, "Fetching the map");
-    return overpass(areaQuery(b), fetchProgress(10, 55)).then(function (ways) {
+    return mapFor(b, 10, 55).then(function (ways) {
       if (ways && ways.length && sameBounds(b, state.bounds)) {
-        osmCache[boundsKey(b)] = ways;
         state.osmWays = ways;
       } else if (!ways || !ways.length) {
-        toast("Map data unavailable — showing plain ground");
+        noMapHere();
       }
       return queueBuild(55, 100);
     }).then(function () {
@@ -7561,6 +7720,32 @@
   });
 
   // ---------- first run ----------
+
+  // A walks.json beside the page, if there is one. Missing is the normal case
+  // and must cost nothing: no error, no delay worth noticing, straight on to
+  // asking where they walk.
+  function tryBundledWalks() {
+    return fetch("walks.json", { cache: "no-store" }).then(function (r) {
+      if (!r.ok) return false;
+      return r.json().then(function (data) {
+        if (!Array.isArray(data) || data.length < 3) return false;
+        var ok = data.every(function (p) {
+          return typeof p.lat === "number" && typeof p.lng === "number" && p.t &&
+                 !isNaN(new Date(p.t).getTime());
+        });
+        if (!ok) return false;
+        buildFromPoints(data);
+        state.isDemo = false;
+        routeCache = {}; walkGraph = null; walkGraphKey = null;
+        saveLocal();
+        return rebuildFromData().then(function () {
+          toast("Loaded " + data.length + " points from walks.json");
+          return true;
+        });
+      });
+    }).catch(function () { return false; });
+  }
+
   function openWelcome() {
     document.getElementById("welcome").classList.add("open");
     document.getElementById("welcome-name").value = state.dogName === "Your Dog"
@@ -7971,18 +8156,37 @@
   if (saved) {
     applyDogName(saved.name);
     buildFromPoints(saved.points);
+    // The world this was last built around, rather than one recomputed from
+    // the walks: same patch of map, same key, so the kept copy is found.
+    if (saved.bounds && isFinite(saved.bounds.minLat)) {
+      state.bounds = saved.bounds;
+      state.placeLabel = saved.placeLabel || null;
+      state.isDemo = !!saved.isDemo;
+    }
     routeCache = {}; walkGraph = null; walkGraphKey = null;
     rebuildFromData();
     toast("Restored your saved walks");
   } else {
-    // Nobody has been here before. There is nothing to show them — and there
-    // deliberately is not: what used to be here was one real dog's real walks,
-    // which is a fine thing for its owner to open and the wrong thing to hand
-    // a stranger. So ask where *they* walk.
+    // Nobody has been here before. Two ways that can go.
+    //
+    // If there is a walks.json sitting next to the page, that is this copy's
+    // own dog and it loads straight away — which is how you put your own
+    // history back after clearing the browser, and how a private copy of this
+    // behaves like it used to. It is deliberately a file beside the page
+    // rather than data compiled into it, so the published copy can have none
+    // and yours can have yours, from the same source.
+    //
+    // Otherwise there is nothing to show them, and deliberately so: what used
+    // to be here was one real dog's real walks, which is a fine thing for its
+    // owner to open and the wrong thing to hand a stranger. So ask where
+    // *they* walk.
     applyDogName("");
-    hideBoot();
-    firstMapIn = true;
-    openWelcome();
+    tryBundledWalks().then(function (loaded) {
+      if (loaded) return;
+      hideBoot();
+      firstMapIn = true;
+      openWelcome();
+    });
   }
 })();
 </script>

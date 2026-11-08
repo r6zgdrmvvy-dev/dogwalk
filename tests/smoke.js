@@ -1896,6 +1896,81 @@ async function waitForReady(page) {
       if (srv) srv.stop();
     }
 
+    // ---------- a walks.json beside the page ----------
+    // How you put your own history back after clearing a browser, and how a
+    // private copy behaves like it used to without the published one carrying
+    // anybody's GPS.
+    console.log("walks.json beside the page");
+    const bundled = [];
+    for (let i = 0; i < 20; i++) {
+      bundled.push({ lat: 55.7952 + i * 0.0003, lng: -4.2955 + i * 0.00025,
+                     t: new Date(Date.UTC(2026, 7, 21, 8, i * 2, 0)).toISOString()
+                        .replace(/\.\d+Z$/, "Z") });
+    }
+    const bundledPath = path.join(ROOT, "walks.json");
+    fs.writeFileSync(bundledPath, JSON.stringify(bundled));
+    try {
+      const wj = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      const wjErrors = [];
+      wj.on("pageerror", (e) => wjErrors.push(String(e.message)));
+      await stub(wj);
+      await wj.goto(base);
+      await wj.waitForFunction(
+        () => window.dogwalk && window.dogwalk.state.points.length > 0,
+        null, { timeout: 60000 });
+      const got = await wj.evaluate(() => ({
+        points: window.dogwalk.state.points.length,
+        isDemo: window.dogwalk.state.isDemo === true,
+        welcome: document.getElementById("welcome").classList.contains("open"),
+      }));
+      check("a walks.json beside the page is loaded on a first run",
+            got.points === 20 && !got.welcome, JSON.stringify(got));
+      check("and is treated as real walks, not as the demo",
+            got.isDemo === false, JSON.stringify(got));
+      check("no page errors", wjErrors.length === 0, wjErrors.slice(0, 2).join(" | "));
+      await wj.close();
+    } finally {
+      fs.rmSync(bundledPath, { force: true });
+    }
+
+    // ---------- the map outliving the map service ----------
+    // Overpass is free, overloaded and returns 503 often enough that this is
+    // the normal case. A town already built must not come back as a bare field
+    // the next time somebody opens the game.
+    console.log("map survives the map service going down");
+    const keep = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const keepErrors = [];
+    keep.on("pageerror", (e) => keepErrors.push(String(e.message)));
+    await stub(keep);
+    await keep.goto(base);
+    await firstRun(keep, "Rusty");
+    const builtWays = await keep.evaluate(() => (window.dogwalk.state.osmWays || []).length);
+    check("a town is built from the map service", builtWays > 0, builtWays + " ways");
+    // Now take Overpass away entirely and reload, same browser profile.
+    for (const host of ["overpass-api.de", "overpass.kumi.systems", "overpass.openstreetmap.ru"]) {
+      await keep.route("https://" + host + "/api/interpreter", (r) =>
+        r.fulfill({ status: 503, contentType: "text/plain", body: "busy" }));
+    }
+    await keep.reload();
+    // Wait for the world to be rebuilt, not merely for the ways to arrive:
+    // the map landing is the start of the build, not the end of it.
+    await keep.waitForFunction(
+      () => window.dogwalk && (window.dogwalk.state.osmWays || []).length > 0 &&
+            window.__world && window.__world.solid,
+      null, { timeout: 60000 }).catch(() => {});
+    await keep.waitForTimeout(1500);
+    const after503 = await keep.evaluate(() => ({
+      ways: (window.dogwalk.state.osmWays || []).length,
+      buildings: window.__world
+        ? Array.prototype.reduce.call(window.__world.solid, (n, v) => n + v, 0) : 0,
+    }));
+    check("and is still there when the map service is down",
+          after503.ways > 0, JSON.stringify(after503));
+    check("with its buildings, not a bare green field",
+          after503.buildings > 0, after503.buildings + " solid tiles");
+    check("no page errors", keepErrors.length === 0, keepErrors.slice(0, 2).join(" | "));
+    await keep.close();
+
     console.log("no map data available");
     const off = await browser.newPage({ viewport: { width: 1024, height: 720 } });
     const offErrors = [];

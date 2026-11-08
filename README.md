@@ -605,6 +605,45 @@ rather than an error page. Map and weather requests are deliberately never
 cached, and neither is anything under `/api/`: a cached answer to "who am I" is
 somebody else's account after a sign-out.
 
+## When the map does not turn up
+
+The streets, the buildings and the parks come from [Overpass](https://overpass-api.de),
+a free public query service for OpenStreetMap data. It is free, it is heavily
+used, and it returns `503 Service Unavailable` fairly often. When that happens
+you get a town with no buildings in it — plain ground — which looks like the
+game is broken and is not.
+
+Three things make that much rarer than it was:
+
+- **The map is kept.** Once a town has been fetched it goes into IndexedDB and
+  lasts 45 days, so reloading, going offline or Overpass falling over all leave
+  your streets exactly where they were. It is looked up by the patch of map
+  rather than only by an exact match, so picking a different walk in the same
+  town reuses what is already there instead of refetching a megabyte of the
+  same streets.
+- **The mirrors are raced, not queued.** It used to try three in turn at twenty
+  seconds each, so a bad day meant a minute of staring at a progress bar before
+  being told there was no map. Now the second starts seven seconds after the
+  first and the third seven after that, first usable answer wins, and the rest
+  are dropped. Staggered rather than all at once because somebody else pays for
+  these.
+- **It says which it is.** "The map service is busy" and how to retry, rather
+  than a blank field and no explanation.
+
+If you open the game and the ground is bare, Overpass is almost certainly
+having a moment. Press **Map**, then **Take me there** again in a few minutes.
+
+## Bringing your own walks back
+
+The game ships with no real GPS in it, on purpose. If you have your own —
+exported with `scripts/export_tractive.py`, or saved from a previous run — drop
+it next to `game.html` as **`walks.json`** and it loads on first run, before
+the "where do you walk" box appears. It is `.gitignore`d, so your own copy can
+have your dog's history in it and the published copy carries nobody's.
+
+The other two ways in are the **Sync from Tractive** button (see above) and
+**Load file…** in the Map panel.
+
 ## Status / open items
 
 - Sign-in has no email verification and no password reset, so a forgotten
