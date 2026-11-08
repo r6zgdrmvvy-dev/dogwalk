@@ -1344,19 +1344,29 @@
     return "\u2600";
   }
 
-  // Public Overpass instances, raced a few seconds apart. Deliberately spread
-  // across different operators and countries rather than three that share a
-  // bad afternoon: checked on a day when the main one was returning 503, and
-  // four of six were down or timing out at once. The order is not a ranking —
-  // the hedging below starts them a few seconds apart and takes whichever
-  // answers first.
+  // Public Overpass instances, raced a few seconds apart by the hedging below.
+  // Spread across different operators and countries on purpose: checked on a
+  // day the main one was returning 503, four of six were down or timing out
+  // at once.
+  //
+  // The order IS a ranking, for one reason. A browser can only use a mirror
+  // that sends Access-Control-Allow-Origin, and that cannot be established by
+  // reading anybody's documentation — it has to be observed. The first three
+  // are the ones this game has been fetching maps through all along, so their
+  // headers are proven by the thing working. The rest are extra rope: if they
+  // turn out not to send CORS the browser rejects them immediately, the catch
+  // below pulls the next one in early, and nothing is worse than it was.
+  // Never promote one of the unproven ones above the proven ones without
+  // watching a real browser actually load a map through it.
   var OVERPASS = [
+    // Proven in the browser.
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
+    // Public instances, CORS unverified — upside only, never relied on.
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
-    "https://overpass.osm.ch/api/interpreter",
-    "https://overpass.openstreetmap.ru/api/interpreter"
+    "https://overpass.osm.ch/api/interpreter"
   ];
 
   // `onBytes(received, total)` is called as the response streams in. Overpass

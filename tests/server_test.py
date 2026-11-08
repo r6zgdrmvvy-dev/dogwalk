@@ -390,6 +390,18 @@ def main():
             upsrv.shutdown()
             upsrv.server_close()
 
+        # Our own policy must not block a mirror the game is going to try. A
+        # missing entry here looks exactly like that mirror being down, which
+        # is a miserable thing to debug.
+        import re as _re
+        game = open(os.path.join(ROOT, "game.html"), encoding="utf-8").read()
+        block = game.split("var OVERPASS = [", 1)[1].split("];", 1)[0]
+        mirrors = _re.findall(r'"(https://[^/"]+)', block)
+        missing = [h for h in mirrors if h not in csp]
+        check("every Overpass mirror the game races is allowed by the policy",
+              not missing, "missing: " + (", ".join(missing) or "none") +
+              " (of " + str(len(mirrors)) + ")")
+
         # -- billing --------------------------------------------------------
         st, body, _ = a.req("POST", "/api/billing/checkout", {})
         check("checkout says it is not switched on rather than pretending",

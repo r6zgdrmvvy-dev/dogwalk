@@ -109,9 +109,14 @@ CSP = "; ".join([
     "font-src 'self' https://fonts.gstatic.com",
     "script-src 'self' 'unsafe-inline'",
     "worker-src 'self'",
+    # Every Overpass mirror the game may race. Leaving one out here means our
+    # own policy blocks it, which looks exactly like the mirror being down and
+    # is considerably harder to work out. Keep this in step with OVERPASS in
+    # game.html.
     "connect-src 'self' "
     "https://overpass-api.de https://overpass.kumi.systems "
-    "https://overpass.openstreetmap.ru "
+    "https://overpass.openstreetmap.ru https://maps.mail.ru "
+    "https://overpass.private.coffee https://overpass.osm.ch "
     "https://api.postcodes.io https://nominatim.openstreetmap.org "
     "https://archive-api.open-meteo.com https://api.open-meteo.com "
     "http://127.0.0.1:8765 http://localhost:8765",

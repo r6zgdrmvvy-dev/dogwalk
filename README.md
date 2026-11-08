@@ -647,16 +647,33 @@ Four things make that much rarer than it was:
 If you open the game and the ground is bare, Overpass is almost certainly
 having a moment. Press **Map**, then **Take me there** again in a few minutes.
 
-**What about a different service entirely?** The only keyless public
-alternative worth having is [OpenFreeMap](https://openfreemap.org), which
-serves OpenMapTiles-schema vector tiles with no API key and no stated limits.
-It is not wired up, and the reason is worth recording: it would need a
-hand-written Mapbox Vector Tile decoder (protobuf, in a project that vendors
-everything), and the OpenMapTiles schema splits road geometry and road *names*
-into separate layers — so street labels, which this game leans on heavily,
-would have to be stitched back together by position. Protomaps was the other
-candidate and is out: its hosted tiles need an API key and a per-key CORS
-allowlist, which a static page cannot use.
+### Is there an alternative to Overpass?
+
+Short answer: for a static page, no. Checked properly, and worth writing down
+so nobody has to check again.
+
+A browser-side replacement has to clear three bars at once — **no API key**,
+**CORS open to any origin**, and **geometry with its OSM tags**. Each candidate
+falls at a different one:
+
+| | Why not |
+|---|---|
+| [**ohsome API**](https://docs.ohsome.org/ohsome-api/stable/) (HeiGIT) | Needs a free account and key. Returns **Parquet** with **WKB** geometry — a browser would need a Parquet reader and a WKB decoder before it could draw a wall. Limited to 15 requests a minute. |
+| [**QLever**](https://qlever.dev/osm-planet) SPARQL over OSM planet | A real public endpoint, but key policy, CORS and limits are all undocumented, and the default result cap is 100 rows where a town is thousands of ways. |
+| **OSM's own editing API** | Forbidden, not merely discouraged: *"The editing API is provided in order to edit the map data, **not** for read-only purposes or projects."* It also demands a valid `User-Agent`, which page JavaScript is not allowed to set. |
+| [**OpenFreeMap**](https://openfreemap.org) | Keyless and unlimited, but serves **vector tiles**: it needs a hand-written Mapbox Vector Tile decoder (protobuf), and the OpenMapTiles schema puts road geometry and road *names* in separate layers — street labels, which this game leans on, would have to be stitched back together by position. The closest thing to viable, and still a project rather than a swap. |
+| [**Protomaps**](https://protomaps.com) | Hosted tiles need an API key and a per-key CORS allowlist. A static page cannot use either. |
+
+So the strategy is not "find a better API", it is "need Overpass less": six mirrors
+raced, every map kept, an old map served rather than none, and a shared cache on
+your own server if you run one. Which is what the rest of this section describes.
+
+One caveat recorded honestly: only three of the six mirrors have **observed**
+CORS headers — the three this game has been fetching maps through all along.
+The other three are listed after them as upside. If one of them does not send
+`Access-Control-Allow-Origin` the browser rejects it instantly, the next is
+pulled in early, and nothing is worse than before. Do not promote one above the
+proven three without watching a real browser load a map through it.
 
 ## Bringing your own walks back
 
