@@ -1344,9 +1344,18 @@
     return "\u2600";
   }
 
+  // Public Overpass instances, raced a few seconds apart. Deliberately spread
+  // across different operators and countries rather than three that share a
+  // bad afternoon: checked on a day when the main one was returning 503, and
+  // four of six were down or timing out at once. The order is not a ranking —
+  // the hedging below starts them a few seconds apart and takes whichever
+  // answers first.
   var OVERPASS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
     "https://overpass.openstreetmap.ru/api/interpreter"
   ];
 
@@ -1380,7 +1389,7 @@
     //
     // Staggered rather than all three at once because these are free services
     // somebody else pays for, and three queries where one would do is rude.
-    var HEDGE_MS = 7000, GIVE_UP_MS = 25000;
+    var HEDGE_MS = 4500, GIVE_UP_MS = 30000;
     return new Promise(function (resolve) {
       var done = false, live = 0, started = 0, ctls = [];
       var finish = function (v) {
@@ -1415,6 +1424,23 @@
       };
       start();
     });
+  }
+
+  // Our own server, if there is one behind this page, before the public
+  // mirrors. It holds every town anybody here has asked for and keeps serving
+  // them when Overpass is refusing — so one fetch warms the map for everyone,
+  // which is both faster for us and considerably politer to a free service.
+  // Served from static hosting there is no such endpoint; the 404 comes back
+  // in milliseconds and we fall through to the mirrors.
+  function ownMap(b) {
+    var q = "?s=" + b.minLat + "&w=" + b.minLng + "&n=" + b.maxLat + "&e=" + b.maxLng;
+    return fetchSoon("api/map" + q, 30000).then(function (r) {
+      if (!r.ok) return null;
+      return r.json();
+    }).then(function (j) {
+      if (!j || !Array.isArray(j.elements) || !j.elements.length) return null;
+      return j.elements;
+    }).catch(function () { return null; });
   }
 
   // ---------- keeping the map ----------
@@ -1452,7 +1478,10 @@
   // the rectangle shifted forty metres is the whole problem this is here to
   // avoid. Smallest covering box wins, so a tight map is preferred to a loose
   // one when both would do.
-  function mapCacheGet(key, b) {
+  // `stale` ignores the age limit. A forty-five-day-old map of your own street
+  // is worth a great deal more than a green field, and the only time we ask
+  // for one is when every mirror has already refused to give us a fresh one.
+  function mapCacheGet(key, b, stale) {
     return openMapDb().then(function (db) {
       if (!db) return null;
       return new Promise(function (resolve) {
@@ -1460,7 +1489,7 @@
         try {
           tx = db.transaction(MAP_STORE, "readonly").objectStore(MAP_STORE);
         } catch (e) { resolve(null); return; }
-        var cutoff = Date.now() - MAP_KEEP_DAYS * 86400000;
+        var cutoff = stale ? 0 : Date.now() - MAP_KEEP_DAYS * 86400000;
         var exact = tx.get(key);
         exact.onerror = function () { resolve(null); };
         exact.onsuccess = function () {
@@ -6084,12 +6113,25 @@
         return kept;
       }
       setProgress(lo, "Fetching the map");
-      return overpass(areaQuery(b), fetchProgress(lo, hi)).then(function (ways) {
+      return ownMap(b).then(function (mine) {
+        if (mine && mine.length) return mine;
+        return overpass(areaQuery(b), fetchProgress(lo, hi));
+      }).then(function (ways) {
         if (ways && ways.length) {
           osmCache[key] = ways;
           mapCachePut(key, ways);
+          return ways;
         }
-        return ways;
+        // Nothing doing. Anything we have ever kept for this patch beats a
+        // green field, however old it is — streets do not move much, and the
+        // alternative is telling somebody their town has no buildings in it.
+        return mapCacheGet(key, b, true).then(function (old) {
+          if (old) {
+            osmCache[key] = old;
+            toast("The map service is busy — using the copy you already had");
+          }
+          return old;
+        });
       });
     });
   }

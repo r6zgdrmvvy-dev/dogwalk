@@ -19,6 +19,9 @@ import tempfile
 import threading
 import time
 
+os.environ["no_proxy"] = "127.0.0.1,localhost"
+os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
@@ -84,7 +87,7 @@ def main():
     db = os.path.join(tmp, "test.sqlite3")
     store = m.Store(db)
     opts = m.parse_args(["--port", str(PORT), "--quiet"])
-    from http.server import ThreadingHTTPServer
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     httpd = ThreadingHTTPServer((HOST, PORT), m.make_handler(store, opts))
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -308,6 +311,84 @@ def main():
         check("and connect-src names only where the game really talks",
               "connect-src 'self'" in csp and "overpass" in csp and
               "evil" not in csp, csp.split("connect-src")[1][:70])
+
+        # -- the map, served from here ---------------------------------------
+        # Overpass is free and often refusing. One fetch here warms the town
+        # for everybody, and a copy once held keeps being served when every
+        # upstream is down.
+        up = {"hits": 0, "alive": True}
+        ELS = [{"type": "way", "id": 1, "nodes": [1, 2],
+                "geometry": [{"lat": 55.796, "lon": -4.293},
+                             {"lat": 55.797, "lon": -4.292}],
+                "tags": {"highway": "residential", "name": "Cached Street"}}]
+
+        class Upstream(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):                               # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                up["hits"] += 1
+                if not up["alive"]:
+                    self.send_response(503)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                payload = json.dumps({"elements": ELS}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *a):
+                pass
+
+        upsrv = ThreadingHTTPServer((HOST, PORT + 1), Upstream)
+        upsrv.daemon_threads = True
+        threading.Thread(target=upsrv.serve_forever, daemon=True).start()
+        opts.map_upstream = [f"http://{HOST}:{PORT + 1}/"]
+        try:
+            box = "?s=55.7950&w=-4.2980&n=55.7990&e=-4.2900"
+            st, body, _ = a.req("GET", "/api/map?s=1&w=2")
+            check("a map request without a box is refused", st == 400, str(st))
+            st, body, _ = a.req("GET", "/api/map?s=0&w=0&n=40&e=40")
+            check("and a box the size of a continent is refused", st == 413, str(st))
+
+            st, body, _ = a.req("GET", "/api/map" + box)
+            check("a town is fetched from upstream the first time",
+                  st == 200 and body.get("from") == "upstream" and
+                  len(body["elements"]) == 1, json.dumps(body)[:90])
+            check("and upstream was actually asked", up["hits"] == 1, up["hits"])
+
+            st, body, _ = a.req("GET", "/api/map" + box)
+            check("the second time it comes from here, not from upstream",
+                  st == 200 and body.get("from") == "cache" and up["hits"] == 1,
+                  body.get("from") + ", upstream hits " + str(up["hits"]))
+
+            # Somebody else entirely, who has never fetched anything.
+            fresh = Client()
+            st, body, _ = fresh.req("GET", "/api/map" + box)
+            check("including for a player who has never been here before",
+                  st == 200 and body.get("from") == "cache" and up["hits"] == 1,
+                  body.get("from"))
+
+            # Now the thing it is all for: every upstream refusing.
+            up["alive"] = False
+            with store._conn() as conn:                      # noqa: SLF001
+                conn.execute("UPDATE maps SET fetched_at = ?",
+                             (int(time.time()) - (m.MAP_FRESH_DAYS + 5) * 86400,))
+            st, body, _ = a.req("GET", "/api/map" + box)
+            check("with every upstream down, the old copy is served anyway",
+                  st == 200 and body.get("from") == "cache-stale" and
+                  body["elements"][0]["tags"]["name"] == "Cached Street",
+                  body.get("from"))
+
+            st, body, _ = a.req("GET", "/api/map?s=10.0&w=10.0&n=10.004&e=10.008")
+            check("but a town nobody has ever fetched says so plainly",
+                  st == 503 and "busy" in body.get("error", ""), str(st))
+        finally:
+            upsrv.shutdown()
+            upsrv.server_close()
 
         # -- billing --------------------------------------------------------
         st, body, _ = a.req("POST", "/api/billing/checkout", {})

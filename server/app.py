@@ -33,6 +33,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.parse
 from urllib.parse import urlparse, parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -64,6 +65,29 @@ LOGIN_MAX = 8
 MAX_BODY = 4 * 1024 * 1024        # a save is walk points; a big one is ~1MB
 FREE_SAVE_BYTES = 512 * 1024
 PRO_SAVE_BYTES = 8 * 1024 * 1024
+
+# The map, served from here rather than from Overpass directly.
+#
+# Overpass is free, overloaded, and returns 503 often enough that a browser
+# asking it for a town gets a green field on a regular basis. This server can
+# do better than a browser can, for one reason: everybody who plays here wants
+# the same few towns, so one fetch warms the cache for all of them, and a copy
+# once fetched is kept and served even when every upstream is refusing.
+#
+# It is also the polite thing to do. One query per town per month from one
+# server beats one query per player per page load from thousands of browsers.
+MAP_UPSTREAM = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+MAP_FRESH_DAYS = 45          # after this, try upstream again — but keep the old
+MAP_MAX_SPAN = 0.08          # degrees; a town, not a county
+MAP_TIMEOUT_S = 25
+# Fetches of boxes we do not already hold, per address, per the same
+# fifteen-minute window the login limiter uses. Cached boxes are free.
+MAP_NEW_PER_WINDOW = 40
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s.]+\.[^@\s]+$")
 
@@ -131,6 +155,12 @@ CREATE TABLE IF NOT EXISTS saves (
   user_id      INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   body         TEXT NOT NULL,
   updated_at   INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS maps (
+  box          TEXT PRIMARY KEY,
+  body         TEXT NOT NULL,
+  fetched_at   INTEGER NOT NULL,
+  hits         INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS login_attempts (
   who          TEXT NOT NULL,
@@ -271,6 +301,21 @@ class Store:
             c.execute("DELETE FROM sessions WHERE user_id = ?", (uid,))
             c.execute("DELETE FROM users WHERE id = ?", (uid,))
 
+    # -- the map --------------------------------------------------------------
+    def get_map(self, box):
+        row = self._conn().execute(
+            "SELECT body, fetched_at FROM maps WHERE box = ?", (box,)).fetchone()
+        if row:
+            with self._conn() as c:
+                c.execute("UPDATE maps SET hits = hits + 1 WHERE box = ?", (box,))
+        return row
+
+    def put_map(self, box, body):
+        with self._conn() as c:
+            c.execute("INSERT INTO maps (box, body, fetched_at) VALUES (?,?,?)"
+                      " ON CONFLICT(box) DO UPDATE SET body = excluded.body,"
+                      " fetched_at = excluded.fetched_at", (box, body, int(time.time())))
+
     # -- rate limiting ------------------------------------------------------
     def note_attempt(self, who):
         with self._conn() as c:
@@ -328,6 +373,52 @@ def email_problem(email):
         return "That does not look like an email address."
     if len(email) > 200:
         return "That address is too long."
+    return None
+
+
+def area_query(s_, w_, n_, e_):
+    """The same query the browser sends, so the answer is interchangeable."""
+    bbox = "%f,%f,%f,%f" % (s_, w_, n_, e_)
+    return ("[out:json][timeout:20];("
+            'way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|'
+            'unclassified|living_street|service|pedestrian|footway|path|cycleway|steps|'
+            'track|bridleway)$"](' + bbox + ");"
+            'way["natural"="water"](' + bbox + ");"
+            'way["landuse"~"^(forest|grass|meadow|recreation_ground|residential)$"](' + bbox + ");"
+            'way["natural"="wood"](' + bbox + ");"
+            'way["leisure"~"^(park|golf_course|nature_reserve)$"](' + bbox + ");"
+            'way["building"](' + bbox + ");"
+            ");out geom;")
+
+
+def fetch_map(query, upstreams, timeout=MAP_TIMEOUT_S):
+    """Ask each upstream in turn. Returns the elements list, or None.
+
+    In turn rather than in parallel: a server has no user watching a progress
+    bar, so the few extra seconds cost nothing, and hammering four free
+    services at once to save them would be an odd way to be a good neighbour.
+    """
+    import urllib.error
+    import urllib.request
+    body = urllib.parse.urlencode({"data": query}).encode()
+    for url in upstreams:
+        try:
+            req = urllib.request.Request(url, data=body, method="POST", headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                # Say who this is, so an operator with a problem can find us
+                # rather than only being able to block us.
+                "User-Agent": "dogwalk-map-cache (+https://github.com/"
+                              "r6zgdrmvvy-dev/dogwalk)",
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                if r.status != 200:
+                    continue
+                data = json.loads(r.read().decode("utf-8"))
+            els = data.get("elements")
+            if isinstance(els, list) and els:
+                return els
+        except Exception as exc:                             # noqa: BLE001
+            print(f"  map: {urlparse(url).hostname} said {exc}", file=sys.stderr)
     return None
 
 
@@ -530,6 +621,8 @@ def make_handler(store, opts):
                                         "plan": plan_of(me),
                                         "planUntil": me["plan_until"],
                                         "saveLimit": save_limit(plan_of(me))})
+            if route.path == "/api/map":
+                return self._map(parse_qs(route.query))
             if route.path == "/api/save":
                 me = self._me()
                 if not me:
@@ -668,6 +761,56 @@ def make_handler(store, opts):
                                     "limit": limit, "plan": plan,
                                     "updatedAt": when})
 
+        # -- the map --------------------------------------------------------
+        def _map(self, q):
+            def num(k):
+                try:
+                    return float(q.get(k, [""])[0])
+                except ValueError:
+                    return None
+            s_, w_, n_, e_ = num("s"), num("w"), num("n"), num("e")
+            if None in (s_, w_, n_, e_) or n_ <= s_ or e_ <= w_:
+                return self._send(400, {"error": "Need s, w, n, e."})
+            if not (-90 <= s_ < n_ <= 90 and -180 <= w_ < e_ <= 180):
+                return self._send(400, {"error": "That is not a box on Earth."})
+            if (n_ - s_) > MAP_MAX_SPAN or (e_ - w_) > MAP_MAX_SPAN:
+                # Otherwise this is an open proxy for arbitrarily large
+                # Overpass queries, billed to somebody else's free service.
+                return self._send(413, {"error": "That box is too big."})
+
+            # Snapped to about eleven metres, so two players standing in the
+            # same street share a cache entry instead of each making their own.
+            box = ",".join("%.4f" % v for v in (s_, w_, n_, e_))
+            row = store.get_map(box)
+            fresh = row and (time.time() - row["fetched_at"]) < MAP_FRESH_DAYS * 86400
+            if fresh:
+                return self._send(200, {"elements": json.loads(row["body"]),
+                                        "from": "cache",
+                                        "fetchedAt": row["fetched_at"]})
+
+            who = "map:" + self._who()
+            if store.recent_attempts(who) >= MAP_NEW_PER_WINDOW:
+                if row:
+                    return self._send(200, {"elements": json.loads(row["body"]),
+                                            "from": "cache-stale",
+                                            "fetchedAt": row["fetched_at"]})
+                return self._send(429, {"error": "Too many new maps just now."})
+            store.note_attempt(who)
+
+            els = fetch_map(area_query(s_, w_, n_, e_), opts.map_upstream)
+            if els:
+                store.put_map(box, json.dumps(els, separators=(",", ":")))
+                return self._send(200, {"elements": els, "from": "upstream",
+                                        "fetchedAt": int(time.time())})
+            if row:
+                # Every upstream refused, but we have had this town before.
+                # An old map of the right streets beats a green field.
+                return self._send(200, {"elements": json.loads(row["body"]),
+                                        "from": "cache-stale",
+                                        "fetchedAt": row["fetched_at"]})
+            return self._send(503, {"error": "The map service is busy and this "
+                                             "town is not cached here yet."})
+
         # -- billing --------------------------------------------------------
         def _checkout(self, body):
             me = self._me()
@@ -738,6 +881,10 @@ def parse_args(argv=None):
                    help="Exact origin(s) allowed to make state-changing requests. "
                         "Defaults to whatever Host the request came in on, which is "
                         "right behind a normal reverse proxy.")
+    p.add_argument("--map-upstream", action="append", default=None,
+                   help="Where /api/map fetches from when it has no cached "
+                        "copy. Repeatable; defaults to the public Overpass "
+                        "mirrors. Point it at your own instance if you have one.")
     p.add_argument("--trust-proxy", type=int, default=0, metavar="HOPS",
                    help="How many reverse proxies are in front of this. Behind "
                         "one, every request arrives from the proxy's address, so "
@@ -755,6 +902,8 @@ def parse_args(argv=None):
 
 def main():
     opts = parse_args()
+    if not opts.map_upstream:
+        opts.map_upstream = list(MAP_UPSTREAM)
     store = Store(opts.db)
     store.sweep()
 

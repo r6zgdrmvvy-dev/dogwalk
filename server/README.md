@@ -49,6 +49,30 @@ splitting it up — but `connect-src` is the directive that earns its keep here:
 it names the exact list of places this game is allowed to send anything, so an
 injected script cannot post a walk history off somewhere else.
 
+## Serving the map
+
+`GET /api/map?s=&w=&n=&e=` returns the same OSM elements the browser would get
+from Overpass, with three differences: it is cached here permanently, the cache
+is shared by everybody on this server, and when every upstream is refusing it
+serves the copy it already has rather than nothing.
+
+That last part is the point. Overpass is free, heavily used, and returns 503
+often enough that a browser asking it directly gets a green field on a regular
+basis. A server does not have that problem after the first fetch.
+
+- Boxes are snapped to four decimal places (about eleven metres), so two
+  players in the same street share one cache entry.
+- A box larger than 0.08° on a side is refused — otherwise this is an open
+  proxy for arbitrarily large Overpass queries billed to somebody else.
+- Fetching a box that is *not* already held is rate-limited per address;
+  serving one that is costs nothing and is not limited.
+- Upstreams are tried in turn, not in parallel. There is no user watching a
+  progress bar here, and hammering four free services at once to save them
+  would be an odd way to be a good neighbour. `--map-upstream` overrides the
+  list; point it at your own Overpass instance if you run one.
+- Requests identify themselves in the User-Agent, so an operator with a problem
+  can find you rather than only being able to block you.
+
 ## Saving from two places at once
 
 Last-write-wins loses somebody's walks. A save carries the `updatedAt` the

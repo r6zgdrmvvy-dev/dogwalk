@@ -613,7 +613,15 @@ used, and it returns `503 Service Unavailable` fairly often. When that happens
 you get a town with no buildings in it — plain ground — which looks like the
 game is broken and is not.
 
-Three things make that much rarer than it was:
+Four things make that much rarer than it was:
+
+- **Your own server is tried first, if there is one.** `server/app.py` serves
+  `/api/map`, which holds every town anybody on that server has asked for and
+  keeps serving them when Overpass is refusing. One fetch warms the map for
+  everyone, which is faster for players and considerably kinder to a free
+  service than one query per browser per page load. Served from static
+  hosting there is no such endpoint, the 404 comes back in milliseconds, and
+  the game falls through to the public mirrors.
 
 - **The map is kept.** Once a town has been fetched it goes into IndexedDB and
   lasts 45 days, so reloading, going offline or Overpass falling over all leave
@@ -621,17 +629,34 @@ Three things make that much rarer than it was:
   rather than only by an exact match, so picking a different walk in the same
   town reuses what is already there instead of refetching a megabyte of the
   same streets.
-- **The mirrors are raced, not queued.** It used to try three in turn at twenty
-  seconds each, so a bad day meant a minute of staring at a progress bar before
-  being told there was no map. Now the second starts seven seconds after the
-  first and the third seven after that, first usable answer wins, and the rest
-  are dropped. Staggered rather than all at once because somebody else pays for
-  these.
+- **Six mirrors, raced rather than queued.** It used to try three in turn at
+  twenty seconds each, so a bad day meant a minute of staring at a progress bar
+  before being told there was no map. Now they start four and a half seconds
+  apart, first usable answer wins, and the rest are dropped. Staggered rather
+  than all at once because somebody else pays for these. The list is spread
+  across different operators and countries deliberately: checked on a day when
+  the main instance was returning 503, four of six public mirrors were down or
+  timing out simultaneously.
+- **An old map beats no map.** If every mirror refuses and the age limit has
+  passed, the expired copy is served anyway rather than discarded. Streets do
+  not move much, and the alternative is telling somebody their town has no
+  buildings in it.
 - **It says which it is.** "The map service is busy" and how to retry, rather
   than a blank field and no explanation.
 
 If you open the game and the ground is bare, Overpass is almost certainly
 having a moment. Press **Map**, then **Take me there** again in a few minutes.
+
+**What about a different service entirely?** The only keyless public
+alternative worth having is [OpenFreeMap](https://openfreemap.org), which
+serves OpenMapTiles-schema vector tiles with no API key and no stated limits.
+It is not wired up, and the reason is worth recording: it would need a
+hand-written Mapbox Vector Tile decoder (protobuf, in a project that vendors
+everything), and the OpenMapTiles schema splits road geometry and road *names*
+into separate layers — so street labels, which this game leans on heavily,
+would have to be stitched back together by position. Protomaps was the other
+candidate and is out: its hosted tiles need an API key and a per-key CORS
+allowlist, which a static page cannot use.
 
 ## Bringing your own walks back
 
