@@ -1,0 +1,39 @@
+# Render blueprint for the account server.
+#
+# One web service, no build step and no dependencies — the server is standard
+# library Python, which is the whole reason this file is six lines of config
+# rather than a Dockerfile and a lockfile.
+#
+# The disk is the part that matters. A Render web service has an ephemeral
+# filesystem: without a mounted disk the SQLite database is wiped on every
+# deploy and every restart, which means everybody's account and everybody's
+# walks, gone, silently. The map cache could stand that — it would just
+# refetch — but accounts cannot.
+services:
+  - type: web
+    name: dogwalk
+    runtime: python
+    region: frankfurt
+    plan: starter            # a disk needs a paid instance; free has no disk
+    branch: main
+    buildCommand: "python3 -c \"import sqlite3, hashlib, hmac; hashlib.scrypt(b'x', salt=b'y', n=2, r=8, p=1, maxmem=1<<20)\""
+    startCommand: "python3 server/app.py --db /var/lib/dogwalk/dogwalk.sqlite3"
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: dogwalk-data
+      mountPath: /var/lib/dogwalk
+      sizeGB: 1
+    envVars:
+      # Render terminates TLS in front of us and forwards over one hop, so the
+      # session cookie must be Secure and __Host- prefixed, and the login rate
+      # limiter must read the real client address out of X-Forwarded-For
+      # rather than treating Render's proxy as one very busy user.
+      - key: DOGWALK_HTTPS
+        value: "1"
+      - key: DOGWALK_TRUST_PROXY
+        value: "1"
+      - key: HOST
+        value: 0.0.0.0
+      - key: PYTHON_VERSION
+        value: "3.11.9"

@@ -870,11 +870,17 @@ def make_handler(store, opts):
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--host", default="127.0.0.1", help="Address to bind (default: loopback)")
-    p.add_argument("--port", type=int, default=8080)
+    # PORT and HOST come from the environment because that is how every
+    # platform that runs this will hand them over — Render, Fly, Heroku and a
+    # systemd unit all set PORT and expect you to bind 0.0.0.0. Flags still win.
+    p.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"),
+                   help="Address to bind (default: loopback, or $HOST)")
+    p.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")),
+                   help="Port to bind (default: 8080, or $PORT)")
     p.add_argument("--db", default=os.environ.get("DOGWALK_DB",
                                                   os.path.join(HERE, "dogwalk.sqlite3")))
     p.add_argument("--https", action="store_true",
+                   default=os.environ.get("DOGWALK_HTTPS", "") == "1",
                    help="This is served over TLS (sets Secure cookies and HSTS). "
                         "Set it whenever anything but localhost can reach you.")
     p.add_argument("--origin", action="append", default=None,
@@ -885,7 +891,9 @@ def parse_args(argv=None):
                    help="Where /api/map fetches from when it has no cached "
                         "copy. Repeatable; defaults to the public Overpass "
                         "mirrors. Point it at your own instance if you have one.")
-    p.add_argument("--trust-proxy", type=int, default=0, metavar="HOPS",
+    p.add_argument("--trust-proxy", type=int,
+                   default=int(os.environ.get("DOGWALK_TRUST_PROXY", "0")),
+                   metavar="HOPS",
                    help="How many reverse proxies are in front of this. Behind "
                         "one, every request arrives from the proxy's address, so "
                         "the per-address login limit becomes one bucket for the "
@@ -904,6 +912,11 @@ def main():
     opts = parse_args()
     if not opts.map_upstream:
         opts.map_upstream = list(MAP_UPSTREAM)
+    # The database may be on a mounted disk whose directory the platform
+    # created but nothing has written to yet.
+    parent = os.path.dirname(os.path.abspath(opts.db))
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
     store = Store(opts.db)
     store.sweep()
 
